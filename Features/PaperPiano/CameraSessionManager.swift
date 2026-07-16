@@ -31,7 +31,7 @@ class CameraSessionManager: NSObject, ObservableObject {
 
     private let session = AVCaptureSession()
     private let videoOutput = AVCaptureVideoDataOutput()
-    private let videoQueue = DispatchQueue(label: "com.muselearn.camera", qos: .userInteractive)
+    private let videoQueue = DispatchQueue(label: "com.tapnote.camera", qos: .userInteractive)
 
     // Vision requests
     private var handPoseRequest = VNDetectHumanHandPoseRequest()

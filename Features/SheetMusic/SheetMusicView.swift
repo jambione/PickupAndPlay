@@ -14,7 +14,7 @@ struct SheetMusicView: View {
             drawTimeSignature(context: context, size: size)
             drawNotes(context: context, size: size)
         }
-        .background(Color(.systemBackground))
+        .background(Color(UIColor.systemBackground))
         .cornerRadius(Radius.md)
         .shadow(color: .black.opacity(0.05), radius: 6)
     }
@@ -79,7 +79,7 @@ struct SheetMusicView: View {
     // MARK: - Drawing
 
     private func drawStaff(context: GraphicsContext, size: CGSize) {
-        var context = context
+        let context = context
         let lineColor = Color.gray.opacity(0.5)
 
         for i in 0...4 {
@@ -92,7 +92,7 @@ struct SheetMusicView: View {
     }
 
     private func drawClef(context: GraphicsContext, size: CGSize) {
-        var context = context
+        let context = context
         // Simple stylized G clef using text
         context.draw(
             Text("𝄞")
@@ -103,7 +103,7 @@ struct SheetMusicView: View {
     }
 
     private func drawTimeSignature(context: GraphicsContext, size: CGSize) {
-        var context = context
+        let context = context
         let parts = exercise.timeSignature.rawValue.split(separator: "/")
         guard parts.count == 2 else { return }
 
@@ -124,7 +124,7 @@ struct SheetMusicView: View {
     }
 
     private func drawNotes(context: GraphicsContext, size: CGSize) {
-        var context = context
+        let context = context
 
         for (i, note) in exercise.notes.enumerated() {
             let x = noteStartX + CGFloat(i) * noteSpacing
@@ -150,7 +150,7 @@ struct SheetMusicView: View {
             let noteRadius: CGFloat = note.duration == .whole ? 7 : 6
             let noteRect = CGRect(x: x - noteRadius, y: y - noteRadius * 0.7,
                                   width: noteRadius * 2, height: noteRadius * 1.4)
-            var notePath = Path(ellipseIn: noteRect)
+            let notePath = Path(ellipseIn: noteRect)
 
             if note.duration == .whole {
                 context.stroke(notePath, with: .color(noteColor), lineWidth: 2)
@@ -187,7 +187,7 @@ struct SheetMusicView: View {
 
             // Current note highlight ring
             if isCurrent {
-                var ring = Path(ellipseIn: noteRect.insetBy(dx: -4, dy: -4))
+                let ring = Path(ellipseIn: noteRect.insetBy(dx: -4, dy: -4))
                 context.stroke(ring, with: .color(noteColor.opacity(0.3)), lineWidth: 2)
             }
 

@@ -11,7 +11,7 @@ struct LessonSessionView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color(.systemBackground).ignoresSafeArea()
+                Color(UIColor.systemBackground).ignoresSafeArea()
 
                 switch session.phase {
                 case .intro:
@@ -148,7 +148,7 @@ private struct IntroPhaseView: View {
                 HStack(spacing: Spacing.sm) {
                     Image(systemName: "mic.fill")
                         .foregroundColor(.indigo)
-                    Text("Make sure your microphone is enabled so MuseLearn can hear you play.")
+                    Text("Make sure your microphone is enabled so TapNote can hear you play.")
                         .font(MuseFont.body(14))
                         .foregroundColor(.secondary)
                 }
@@ -266,7 +266,7 @@ private struct MicFeedbackView: View {
                         Label("Skip", systemImage: "forward.fill")
                             .font(MuseFont.caption())
                             .padding(8)
-                            .background(Color(.systemGray5))
+                            .background(Color.gray.opacity(0.2))
                             .cornerRadius(Radius.sm)
                     }
                     .buttonStyle(.plain)
@@ -306,7 +306,7 @@ private struct MicFeedbackView: View {
                 pitchService.stopListening()
             }
         }
-        .onChange(of: pitchService.currentResult?.isAccurate) { isAccurate in
+        .onChange(of: pitchService.currentResult?.isAccurate) { _, isAccurate in
             if isAccurate == true {
                 session.advanceNote(correct: true)
             }

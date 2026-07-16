@@ -89,7 +89,7 @@ struct HomeView: View {
                 }
                 .padding(.top, Spacing.md)
             }
-            .navigationTitle("MuseLearn")
+            .navigationTitle("TapNote")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.large)
             #endif
@@ -268,7 +268,7 @@ private struct InstrumentSwitchBar: View {
                         .background(
                             userProgress.selectedInstrument == instrument
                             ? Color.indigo
-                            : Color(.systemGray6)
+                            : Color(UIColor.systemBackground)
                         )
                         .foregroundColor(
                             userProgress.selectedInstrument == instrument ? .white : .primary

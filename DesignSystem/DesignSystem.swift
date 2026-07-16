@@ -77,7 +77,7 @@ struct MuseCard<Content: View>: View {
     }
     var body: some View {
         content
-            .background(Color(.systemBackground))
+            .background(Color(UIColor.systemBackground))
             .cornerRadius(Radius.lg)
             .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 2)
     }

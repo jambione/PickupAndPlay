@@ -133,7 +133,7 @@ private struct StatTile: View {
         }
         .frame(maxWidth: .infinity)
         .padding(Spacing.md)
-        .background(Color(.systemBackground))
+        .background(Color(UIColor.systemBackground))
         .cornerRadius(Radius.lg)
         .shadow(color: .black.opacity(0.05), radius: 5)
     }
@@ -226,7 +226,7 @@ struct AchievementsView: View {
                         }
                     }
                     .padding(Spacing.md)
-                    .background(Color(.systemBackground))
+                    .background(Color(UIColor.systemBackground))
                     .cornerRadius(Radius.lg)
                     .shadow(color: .black.opacity(0.05), radius: 5)
                     .padding(.horizontal, Spacing.md)
@@ -312,7 +312,7 @@ private struct AchievementCard: View {
         .frame(maxWidth: .infinity)
         .background(
             RoundedRectangle(cornerRadius: Radius.lg)
-                .fill(Color(.systemBackground))
+                .fill(Color(UIColor.systemBackground))
                 .shadow(color: achievement.isUnlocked ? .indigo.opacity(0.1) : .black.opacity(0.04),
                         radius: 6)
         )

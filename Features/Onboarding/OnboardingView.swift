@@ -8,7 +8,7 @@ struct OnboardingView: View {
 
     var body: some View {
         ZStack {
-            Color(.systemBackground).ignoresSafeArea()
+            Color(UIColor.systemBackground).ignoresSafeArea()
 
             TabView(selection: $currentPage) {
                 WelcomePage()
@@ -75,7 +75,7 @@ private struct WelcomePage: View {
                 .foregroundColor(.indigo)
                 .padding(.bottom, Spacing.md)
 
-            Text("Welcome to MuseLearn")
+            Text("Welcome to TapNote")
                 .font(MuseFont.display())
                 .multilineTextAlignment(.center)
 
@@ -159,7 +159,7 @@ private struct InstrumentOptionCard: View {
             .padding(Spacing.md)
             .background(
                 RoundedRectangle(cornerRadius: Radius.lg)
-                    .fill(Color(.systemBackground))
+                    .fill(Color(UIColor.systemBackground))
                     .shadow(color: isSelected ? .indigo.opacity(0.2) : .black.opacity(0.05),
                             radius: isSelected ? 8 : 4, x: 0, y: 2)
             )

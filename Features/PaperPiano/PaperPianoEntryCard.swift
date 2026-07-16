@@ -65,7 +65,7 @@ struct PaperPianoEntryCard: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 16)
-        .fullScreenCover(isPresented: $showPaperPiano) {
+        .sheet(isPresented: $showPaperPiano) {
             NavigationStack {
                 PaperPianoView()
             }

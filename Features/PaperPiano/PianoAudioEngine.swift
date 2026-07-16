@@ -19,7 +19,7 @@ class PianoAudioEngine {
     private let eq      = AVAudioUnitEQ(numberOfBands: 3)
     private var synthNodes: [Int: AVAudioPlayerNode] = [:]
     private var usingSampler = false
-    private let audioQueue = DispatchQueue(label: "com.muselearn.audio", qos: .userInteractive)
+    private let audioQueue = DispatchQueue(label: "com.tapnote.audio", qos: .userInteractive)
 
     // MARK: - Init
 
@@ -40,7 +40,7 @@ class PianoAudioEngine {
         engine.connect(eq, to: engine.mainMixerNode, format: nil)
 
         // Reverb — small hall for warmth
-        reverb.loadFactoryPreset(.smallHall2)
+        reverb.loadFactoryPreset(.mediumHall)
         reverb.wetDryMix = 18.0
 
         // EQ — slight low mid boost, high roll-off for warmth

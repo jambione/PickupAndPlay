@@ -1,0 +1,18 @@
+# Python / ML
+__pycache__/
+*.pyc
+muselearn_env/
+raw_data/
+checkpoints/
+coreml_output/*.pt
+*.egg-info/
+
+# Xcode
+xcuserdata/
+DerivedData/
+build/
+*.ipa
+*.dSYM.zip
+
+# macOS
+.DS_Store

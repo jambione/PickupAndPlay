@@ -129,13 +129,13 @@ private struct LessonRow: View {
             }
             .padding(.horizontal, Spacing.md)
             .padding(.vertical, 12)
-            .background(Color(.systemBackground))
+            .background(Color(UIColor.systemBackground))
         }
         .disabled(isLocked)
         .buttonStyle(.plain)
         .overlay(
             Rectangle()
-                .fill(Color(.separator).opacity(0.5))
+                .fill(Color.gray.opacity(0.3).opacity(0.5))
                 .frame(height: 0.5),
             alignment: .bottom
         )
@@ -202,7 +202,7 @@ struct LessonDetailView: View {
                              label: "Exercises", value: "\(lesson.exercises.count)")
                 }
                 .padding(.horizontal, Spacing.md)
-                .background(Color(.systemBackground))
+                .background(Color(UIColor.systemBackground))
                 .cornerRadius(Radius.lg)
                 .shadow(color: .black.opacity(0.05), radius: 6)
                 .padding(.horizontal, Spacing.md)
@@ -235,7 +235,7 @@ struct LessonDetailView: View {
                                     .foregroundColor(.secondary)
                             }
                             .padding(Spacing.md)
-                            .background(Color(.systemBackground))
+                            .background(Color(UIColor.systemBackground))
                             .cornerRadius(Radius.md)
                             .shadow(color: .black.opacity(0.04), radius: 4)
                             .padding(.horizontal, Spacing.md)
@@ -258,7 +258,7 @@ struct LessonDetailView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .fullScreenCover(isPresented: $showLesson) {
+        .sheet(isPresented: $showLesson) {
             LessonSessionView(lesson: lesson)
         }
     }

@@ -1,0 +1,356 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		B001 /* TapNoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A001 /* TapNoteApp.swift */; };
+		B002 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A002 /* AppState.swift */; };
+		B003 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A003 /* Models.swift */; };
+		B004 /* UserProgressStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A004 /* UserProgressStore.swift */; };
+		B005 /* PitchDetectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A005 /* PitchDetectionService.swift */; };
+		B006 /* LessonCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A006 /* LessonCatalog.swift */; };
+		B007 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A007 /* DesignSystem.swift */; };
+		B008 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A008 /* OnboardingView.swift */; };
+		B009 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A009 /* HomeView.swift */; };
+		B010 /* LessonListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A010 /* LessonListView.swift */; };
+		B011 /* LessonSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A011 /* LessonSessionView.swift */; };
+		B012 /* SheetMusicView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A012 /* SheetMusicView.swift */; };
+		B013 /* ProgressAndAchievementsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A013 /* ProgressAndAchievementsView.swift */; };
+		B014 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A014 /* Assets.xcassets */; };
+		B015 /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A015 /* CameraPreviewView.swift */; };
+		B016 /* CameraSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A016 /* CameraSessionManager.swift */; };
+		B017 /* PaperPianoEntryCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A017 /* PaperPianoEntryCard.swift */; };
+		B018 /* PaperPianoModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A018 /* PaperPianoModel.swift */; };
+		B019 /* PaperPianoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A019 /* PaperPianoView.swift */; };
+		B020 /* PianoAudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A020 /* PianoAudioEngine.swift */; };
+		B021 /* VirtualPianoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A021 /* VirtualPianoView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A001 /* TapNoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TapNoteApp.swift; path = App/TapNoteApp.swift; sourceTree = "<group>"; };
+		A002 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppState.swift; path = App/AppState.swift; sourceTree = "<group>"; };
+		A003 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Models.swift; path = Core/Models/Models.swift; sourceTree = "<group>"; };
+		A004 /* UserProgressStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = UserProgressStore.swift; path = Core/Services/UserProgressStore.swift; sourceTree = "<group>"; };
+		A005 /* PitchDetectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PitchDetectionService.swift; path = Core/Services/PitchDetectionService.swift; sourceTree = "<group>"; };
+		A006 /* LessonCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LessonCatalog.swift; path = Core/Services/LessonCatalog.swift; sourceTree = "<group>"; };
+		A007 /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DesignSystem.swift; path = DesignSystem/DesignSystem.swift; sourceTree = "<group>"; };
+		A008 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = OnboardingView.swift; path = Features/Onboarding/OnboardingView.swift; sourceTree = "<group>"; };
+		A009 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HomeView.swift; path = Features/Home/HomeView.swift; sourceTree = "<group>"; };
+		A010 /* LessonListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LessonListView.swift; path = Features/Lesson/LessonListView.swift; sourceTree = "<group>"; };
+		A011 /* LessonSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LessonSessionView.swift; path = Features/Lesson/LessonSessionView.swift; sourceTree = "<group>"; };
+		A012 /* SheetMusicView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SheetMusicView.swift; path = Features/SheetMusic/SheetMusicView.swift; sourceTree = "<group>"; };
+		A013 /* ProgressAndAchievementsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProgressAndAchievementsView.swift; path = Features/Progress/ProgressAndAchievementsView.swift; sourceTree = "<group>"; };
+		A014 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
+		A015 /* CameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraPreviewView.swift; path = Features/PaperPiano/CameraPreviewView.swift; sourceTree = "<group>"; };
+		A016 /* CameraSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraSessionManager.swift; path = Features/PaperPiano/CameraSessionManager.swift; sourceTree = "<group>"; };
+		A017 /* PaperPianoEntryCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PaperPianoEntryCard.swift; path = Features/PaperPiano/PaperPianoEntryCard.swift; sourceTree = "<group>"; };
+		A018 /* PaperPianoModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PaperPianoModel.swift; path = Features/PaperPiano/PaperPianoModel.swift; sourceTree = "<group>"; };
+		A019 /* PaperPianoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PaperPianoView.swift; path = Features/PaperPiano/PaperPianoView.swift; sourceTree = "<group>"; };
+		A020 /* PianoAudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PianoAudioEngine.swift; path = Features/PaperPiano/PianoAudioEngine.swift; sourceTree = "<group>"; };
+		A021 /* VirtualPianoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VirtualPianoView.swift; path = Features/PaperPiano/VirtualPianoView.swift; sourceTree = "<group>"; };
+		A099 /* TapNote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TapNote.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		F001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		GRP_APP /* App */ = {
+			isa = PBXGroup;
+			children = (
+				A001 /* TapNoteApp.swift */,
+				A002 /* AppState.swift */,
+			);
+			name = App;
+			sourceTree = "<group>";
+		};
+		GRP_CORE /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				A003 /* Models.swift */,
+				A004 /* UserProgressStore.swift */,
+				A005 /* PitchDetectionService.swift */,
+				A006 /* LessonCatalog.swift */,
+			);
+			name = Core;
+			sourceTree = "<group>";
+		};
+		GRP_DESIGN /* DesignSystem */ = {
+			isa = PBXGroup;
+			children = (
+				A007 /* DesignSystem.swift */,
+			);
+			name = DesignSystem;
+			sourceTree = "<group>";
+		};
+		GRP_FEATURES /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				A008 /* OnboardingView.swift */,
+				A009 /* HomeView.swift */,
+				A010 /* LessonListView.swift */,
+				A011 /* LessonSessionView.swift */,
+				A012 /* SheetMusicView.swift */,
+				A013 /* ProgressAndAchievementsView.swift */,
+				A015 /* CameraPreviewView.swift */,
+				A016 /* CameraSessionManager.swift */,
+				A017 /* PaperPianoEntryCard.swift */,
+				A018 /* PaperPianoModel.swift */,
+				A019 /* PaperPianoView.swift */,
+				A020 /* PianoAudioEngine.swift */,
+				A021 /* VirtualPianoView.swift */,
+			);
+			name = Features;
+			sourceTree = "<group>";
+		};
+		PRODUCTS /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A099 /* TapNote.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		ROOT = {
+			isa = PBXGroup;
+			children = (
+				GRP_APP /* App */,
+				GRP_CORE /* Core */,
+				GRP_DESIGN /* DesignSystem */,
+				GRP_FEATURES /* Features */,
+				A014 /* Assets.xcassets */,
+				PRODUCTS /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		TARGET1 /* TapNote */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CONFLIST1 /* Build configuration list for PBXNativeTarget "TapNote" */;
+			buildPhases = (
+				SOURCES_PHASE /* Sources */,
+				F001 /* Frameworks */,
+				RESOURCES_PHASE /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TapNote;
+			productName = TapNote;
+			productReference = A099 /* TapNote.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		PROJECT /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					TARGET1 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = PROJCONFLIST /* Build configuration list for PBXProject "TapNote" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = ROOT;
+			productRefGroup = PRODUCTS /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				TARGET1 /* TapNote */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		RESOURCES_PHASE /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B014 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		SOURCES_PHASE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B001 /* TapNoteApp.swift in Sources */,
+				B002 /* AppState.swift in Sources */,
+				B003 /* Models.swift in Sources */,
+				B004 /* UserProgressStore.swift in Sources */,
+				B005 /* PitchDetectionService.swift in Sources */,
+				B006 /* LessonCatalog.swift in Sources */,
+				B007 /* DesignSystem.swift in Sources */,
+				B008 /* OnboardingView.swift in Sources */,
+				B009 /* HomeView.swift in Sources */,
+				B010 /* LessonListView.swift in Sources */,
+				B011 /* LessonSessionView.swift in Sources */,
+				B012 /* SheetMusicView.swift in Sources */,
+				B013 /* ProgressAndAchievementsView.swift in Sources */,
+				B015 /* CameraPreviewView.swift in Sources */,
+				B016 /* CameraSessionManager.swift in Sources */,
+				B017 /* PaperPianoEntryCard.swift in Sources */,
+				B018 /* PaperPianoModel.swift in Sources */,
+				B019 /* PaperPianoView.swift in Sources */,
+				B020 /* PianoAudioEngine.swift in Sources */,
+				B021 /* VirtualPianoView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		DEBUG_PROJ /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		DEBUG_TARGET /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = D5K4MV7298;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "TapNote uses the camera to detect your fingers on the paper piano.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "TapNote listens to you play to give real-time feedback on your notes.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tapnote.app;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = com.jambione.tapnote;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.jambione.tapnote;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = YES;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		RELEASE_PROJ /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				SWIFT_OPTIMIZATION_LEVEL = "-Owholemodule";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		RELEASE_TARGET /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = D5K4MV7298;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "TapNote uses the camera to detect your fingers on the paper piano.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "TapNote listens to you play to give real-time feedback on your notes.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tapnote.app;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = com.jambione.tapnote;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.jambione.tapnote;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = YES;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		CONFLIST1 /* Build configuration list for PBXNativeTarget "TapNote" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DEBUG_TARGET /* Debug */,
+				RELEASE_TARGET /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		PROJCONFLIST /* Build configuration list for PBXProject "TapNote" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DEBUG_PROJ /* Debug */,
+				RELEASE_PROJ /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = PROJECT /* Project object */;
+}
