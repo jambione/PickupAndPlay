@@ -78,8 +78,9 @@ struct PaperPianoKey: Identifiable {
 // MARK: - Calibration State
 
 struct KeyboardCalibration {
-    /// The four corners of the printed keyboard in the camera preview's coordinate space.
-    /// Order: topLeft, topRight, bottomLeft, bottomRight.
+    /// The four corners of the printed keyboard in the camera preview's coordinate
+    /// space, in the PAPER's canonical order [TL, TR, BL, BR] as printed (not as
+    /// they appear in the image — the keyboard may be at any rotation in frame).
     /// Writes go through `setCorners(_:)` so the homographies stay cached.
     private(set) var corners: [CGPoint] = []
     var isCalibrated: Bool { corners.count == 4 }
@@ -127,27 +128,23 @@ struct KeyboardCalibration {
     ]
 
     /// Homography mapping the camera's (possibly skewed) keyboard quad → the unit
-    /// keyboard rectangle. Corners are re-ordered to TL, TR, BL, BR so the result is
-    /// robust to the order they were captured/tapped in.
+    /// keyboard rectangle.
+    ///
+    /// `corners` must be in the PAPER's canonical order [TL, TR, BL, BR] as
+    /// printed — the QR payloads (TAPNOTE:TL…) and the guided manual-calibration
+    /// prompts both guarantee it. The order is deliberately NOT inferred from
+    /// image positions: the keyboard may appear at any rotation in frame (e.g.
+    /// phone standing portrait at one end, viewing the keyboard lengthwise), so
+    /// only the printed identity of each corner is meaningful.
     private static func cameraToKeyboardHomography(corners: [CGPoint]) -> [Double]? {
-        guard let c = orderedCorners(corners) else { return nil }
-        return solveHomography(src: c, dst: unitKeyboardCorners)
+        guard corners.count == 4 else { return nil }
+        return solveHomography(src: corners, dst: unitKeyboardCorners)
     }
 
-    /// Inverse: unit keyboard rectangle → camera quad.
+    /// Inverse: unit keyboard rectangle → camera quad. Same order contract.
     private static func keyboardToCameraHomography(corners: [CGPoint]) -> [Double]? {
-        guard let c = orderedCorners(corners) else { return nil }
-        return solveHomography(src: unitKeyboardCorners, dst: c)
-    }
-
-    /// Sorts 4 points into [topLeft, topRight, bottomLeft, bottomRight]
-    /// (preview space has y increasing downward, so smaller y = top).
-    private static func orderedCorners(_ pts: [CGPoint]) -> [CGPoint]? {
-        guard pts.count == 4 else { return nil }
-        let byY = pts.sorted { $0.y < $1.y }
-        let top = Array(byY.prefix(2)).sorted { $0.x < $1.x }
-        let bottom = Array(byY.suffix(2)).sorted { $0.x < $1.x }
-        return [top[0], top[1], bottom[0], bottom[1]]
+        guard corners.count == 4 else { return nil }
+        return solveHomography(src: unitKeyboardCorners, dst: corners)
     }
 
     /// Solves the 8 homography parameters [a,b,c,d,e,f,g,h] mapping src→dst (h33 = 1).

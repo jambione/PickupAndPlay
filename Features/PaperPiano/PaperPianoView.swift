@@ -216,7 +216,10 @@ private struct RegistrationOverlay: View {
                         .foregroundColor(.white)
                 }
                 if manualMode {
-                    Text("Tap the \(4 - manualCorners.count) remaining corners of the printed keyboard")
+                    // Taps must follow the paper's canonical corner order — the
+                    // homography relies on identity, not on-screen position, so the
+                    // keyboard can sit at any rotation in frame.
+                    Text(manualPrompt)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.white.opacity(0.7))
                         .multilineTextAlignment(.center)
@@ -268,13 +271,25 @@ private struct RegistrationOverlay: View {
     }
 
     private var statusText: String {
-        if manualMode { return "Manual: tap each corner" }
+        if manualMode { return "Manual: tap corners in order" }
         let count = camera.foundMarkers.count
         switch count {
         case 0:  return "Point at the printed keyboard"
         case 4:  return "All corners found — hold steady…"
         default: return "Found \(count) of 4 QR corners"
         }
+    }
+
+    /// Step-by-step prompt naming which printed QR corner to tap next, in the
+    /// paper's canonical TL → TR → BL → BR order.
+    private var manualPrompt: String {
+        let steps = [
+            "Tap the ↖ top-left QR (back edge, behind the lowest C3)",
+            "Tap the ↗ top-right QR (back edge, behind the highest C6)",
+            "Tap the ↙ bottom-left QR (front edge, by C3)",
+            "Tap the ↘ bottom-right QR (front edge, by C6)",
+        ]
+        return manualCorners.count < 4 ? steps[manualCorners.count] : "All corners set"
     }
 }
 
@@ -364,9 +379,13 @@ private struct ScanGuideOverlay: View {
     let isAligning: Bool
 
     var body: some View {
-        let w = geo.size.width * 0.88
-        let h = geo.size.height * 0.28
-        let y = geo.size.height * 0.38
+        // Orientation-neutral: the keyboard may run across the frame (overhead
+        // capture, landscape) or lengthwise up it (phone standing portrait at one
+        // end of the keyboard) — shape the guide box to the view's aspect.
+        let portrait = geo.size.height > geo.size.width
+        let w = geo.size.width * (portrait ? 0.62 : 0.88)
+        let h = geo.size.height * (portrait ? 0.62 : 0.28)
+        let y = geo.size.height * (portrait ? 0.16 : 0.38)
         ZStack {
             Color.black.opacity(0.45).ignoresSafeArea()
                 .mask(
@@ -385,12 +404,12 @@ private struct ScanGuideOverlay: View {
                 .frame(width: w, height: h)
                 .position(x: geo.size.width / 2, y: y + h / 2)
                 .animation(.easeInOut(duration: 0.4), value: isAligning)
-            Text("Point at the printed piano keyboard")
+            Text("Fit the whole keyboard and all 4 QR squares in view")
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundColor(.white)
                 .padding(.horizontal, 12).padding(.vertical, 6)
                 .background(Color.black.opacity(0.6), in: Capsule())
-                .position(x: geo.size.width / 2, y: y - 20)
+                .position(x: geo.size.width / 2, y: max(24, y - 20))
         }
     }
 }
@@ -580,7 +599,7 @@ struct PrintInstructionsView: View {
                         PrintStep(number: "3", title: "Lay flat on a table",
                                   description: "Place in a well-lit area. Avoid glare from overhead lights.")
                         PrintStep(number: "4", title: "Point the camera",
-                                  description: "Keep all four QR squares in frame — the keyboard locks on automatically.")
+                                  description: "Overhead or standing at either end of the keyboard — keep all four QR squares in frame and it locks on automatically.")
                         PrintStep(number: "5", title: "Play!",
                                   description: "Tap keys with your fingers — every finger plays its own note.")
                     }
@@ -640,9 +659,10 @@ struct CalibrationHelpView: View {
                     .font(.system(size: 22, weight: .bold, design: .rounded))
                 VStack(alignment: .leading, spacing: 14) {
                     TipRow(icon: "sun.max.fill", text: "Use bright, even lighting. Avoid harsh shadows.")
-                    TipRow(icon: "rectangle.landscape.rotate", text: "Hold your device in landscape mode for best alignment.")
-                    TipRow(icon: "arrow.up.and.down.and.arrow.left.and.right", text: "Keep the full keyboard in frame — all four QR squares visible. Pinch to zoom if needed.")
-                    TipRow(icon: "hand.tap.fill", text: "If auto-detect fails, use Manual Calibration and tap each corner.")
+                    TipRow(icon: "iphone", text: "Place the phone overhead, or standing portrait at either end of the keyboard looking along it — any angle works once all corners register.")
+                    TipRow(icon: "arrow.up.and.down.and.arrow.left.and.right", text: "Keep the full keyboard in frame — all four QR squares visible. Pinch to zoom if the far ones won't register.")
+                    TipRow(icon: "arrow.up.forward", text: "For the side position: raise the phone ~30–40 cm and angle it down, so it sees over your near hand — a hand between camera and keys blocks tracking.")
+                    TipRow(icon: "hand.tap.fill", text: "If auto-detect fails, use Manual Calibration and tap the corners in the prompted order.")
                     TipRow(icon: "figure.wave", text: "Keep your hand above the keyboard so the camera can see your fingertips.")
                 }
                 .padding(.horizontal, 24)

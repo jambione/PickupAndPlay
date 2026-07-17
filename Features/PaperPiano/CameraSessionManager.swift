@@ -127,6 +127,7 @@ class CameraSessionManager: NSObject, ObservableObject {
     private let historySpan: TimeInterval = 0.18
     private let fingerTimeout: TimeInterval = 0.25
     private let repressInterval: TimeInterval = 0.09  // min gap between note-ons of the same key
+    private let tipConfidence: Float = 0.4         // fingertip joint confidence floor — lowered so far-end fingers at steep view angles still track
 
     /// Last camera-triggered note-on per key (video-queue-only) — caps how fast a
     /// flickering boundary can hammer the synth with retriggers.
@@ -437,7 +438,7 @@ class CameraSessionManager: NSObject, ObservableObject {
             var sum = CGPoint.zero
             for joint in Self.tipJoints {
                 guard let point = try? observation.recognizedPoint(joint),
-                      point.confidence > 0.5 else { continue }
+                      point.confidence > tipConfidence else { continue }
                 let pt = CGPoint(x: point.location.x, y: 1 - point.location.y)
                 tips.append((joint, pt))
                 sum.x += pt.x; sum.y += pt.y
