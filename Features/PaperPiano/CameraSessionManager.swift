@@ -92,11 +92,30 @@ class CameraSessionManager: NSObject, ObservableObject {
         var lastSeen: TimeInterval
     }
 
-    private var trackedFingers: [TrackedFinger] = []
-    private var nextFingerID = 0
+    /// Stable identity for one of up to 10 fingers: which hand slot + which joint.
+    /// Vision names each joint per hand, so identity comes free — no positional
+    /// re-association between fingers, which is what makes chords reliable.
+    private struct FingerKey: Hashable {
+        let handSlot: Int
+        let joint: VNHumanHandPoseObservation.JointName
+    }
+
+    /// A hand followed across frames by centroid continuity (not chirality, which
+    /// Vision can flip or report unknown — position is the stable signal).
+    private struct HandTrack {
+        var centroid: CGPoint
+        var lastSeen: TimeInterval
+    }
+
+    private static let tipJoints: [VNHumanHandPoseObservation.JointName] = [
+        .thumbTip, .indexTip, .middleTip, .ringTip, .littleTip
+    ]
+
+    private var handTracks: [Int: HandTrack] = [:]        // slot (0/1) → track
+    private var fingers: [FingerKey: TrackedFinger] = [:] // ≤ 10 entries
 
     // Tunables — normalized image units (0…1). Need on-device tuning.
-    private let assocRadius: Double = 0.09         // max fingertip travel between frames to be "the same finger"
+    private let handAssocRadius: Double = 0.3      // max hand-centroid travel between frames
     private let keyConfirmFrames = 2               // frames a finger must hold a key before it sounds (debounces boundary flicker)
     private let historySpan: TimeInterval = 0.18
     private let fingerTimeout: TimeInterval = 0.25
@@ -310,7 +329,8 @@ class CameraSessionManager: NSObject, ObservableObject {
             guard let self else { return }
             self.liveCalibration = KeyboardCalibration()
             self.isCalibratedOnVideoQueue = false
-            self.trackedFingers.removeAll()
+            self.fingers.removeAll()
+            self.handTracks.removeAll()
             for id in self.pressedKeyIDs {
                 if let key = PaperPianoKey.byID[id] { PianoAudioEngine.shared.stopNote(key: key) }
             }
@@ -381,27 +401,82 @@ class CameraSessionManager: NSObject, ObservableObject {
         }
 
         let now = Date().timeIntervalSinceReferenceDate
-        var fingerTips: [CGPoint] = []
 
+        // Extract each hand's visible tips (y-flipped to top-left origin).
+        var hands: [(tips: [(joint: VNHumanHandPoseObservation.JointName, pt: CGPoint)],
+                     centroid: CGPoint)] = []
         for observation in observations {
-            let tips: [VNHumanHandPoseObservation.JointName] = [
-                .thumbTip, .indexTip, .middleTip, .ringTip, .littleTip
-            ]
-            for tipName in tips {
-                guard let point = try? observation.recognizedPoint(tipName),
+            var tips: [(VNHumanHandPoseObservation.JointName, CGPoint)] = []
+            var sum = CGPoint.zero
+            for joint in Self.tipJoints {
+                guard let point = try? observation.recognizedPoint(joint),
                       point.confidence > 0.5 else { continue }
-                // VNPoint has y-flipped (0=bottom), convert to standard UIKit/normalized
-                fingerTips.append(CGPoint(x: point.location.x, y: 1 - point.location.y))
+                let pt = CGPoint(x: point.location.x, y: 1 - point.location.y)
+                tips.append((joint, pt))
+                sum.x += pt.x; sum.y += pt.y
+            }
+            guard !tips.isEmpty else { continue }
+            let centroid = CGPoint(x: sum.x / CGFloat(tips.count),
+                                   y: sum.y / CGFloat(tips.count))
+            hands.append((tips, centroid))
+        }
+
+        // Assign each observed hand to a persistent slot by centroid continuity,
+        // then upsert its fingers under their (slot, joint) identity.
+        for hand in hands {
+            let slot = assignHandSlot(centroid: hand.centroid, now: now)
+            handTracks[slot] = HandTrack(centroid: hand.centroid, lastSeen: now)
+            for (joint, pt) in hand.tips {
+                let key = FingerKey(handSlot: slot, joint: joint)
+                var finger = fingers[key] ?? TrackedFinger(
+                    id: stableID(for: key), history: [], pressedKeyID: nil,
+                    candidateKeyID: nil, candidateCount: 0, lastSeen: now)
+                appendHistory(&finger, pt: pt, t: now)
+                finger.lastSeen = now
+                evaluatePress(&finger)
+                fingers[key] = finger
             }
         }
 
-        updateTracking(with: fingerTips, now: now)
+        pruneStaleFingers(now: now)
         publishOverlay(timestamp: now)
+    }
+
+    /// Nearest existing hand track within `handAssocRadius`, else a free slot,
+    /// else the stalest slot (Vision reports at most 2 hands).
+    private func assignHandSlot(centroid: CGPoint, now: TimeInterval) -> Int {
+        var best: Int?
+        var bestDist = handAssocRadius
+        for (slot, track) in handTracks {
+            let d = distance(centroid, track.centroid)
+            if d < bestDist { bestDist = d; best = slot }
+        }
+        if let best { return best }
+        for slot in 0...1 where handTracks[slot] == nil { return slot }
+        return handTracks.min { $0.value.lastSeen < $1.value.lastSeen }?.key ?? 0
+    }
+
+    /// Stable overlay/debug id: slot × 10 + joint index.
+    private func stableID(for key: FingerKey) -> Int {
+        key.handSlot * 10 + (Self.tipJoints.firstIndex(of: key.joint) ?? 9)
+    }
+
+    /// Drops fingers (and hands) not seen recently, releasing any notes they held.
+    /// A finger briefly losing confidence keeps its identity until the timeout, so
+    /// it can't get re-associated to a neighbour and retrigger.
+    private func pruneStaleFingers(now: TimeInterval) {
+        for (key, finger) in fingers where now - finger.lastSeen > fingerTimeout {
+            if let keyID = finger.pressedKeyID { releaseKey(keyID) }
+            fingers.removeValue(forKey: key)
+        }
+        for (slot, track) in handTracks where now - track.lastSeen > fingerTimeout {
+            handTracks.removeValue(forKey: slot)
+        }
     }
 
     /// One coalesced main-thread publish per frame, consumed only by the overlay view.
     private func publishOverlay(timestamp: TimeInterval) {
-        let dots = trackedFingers.compactMap { finger -> FingerDot? in
+        let dots = fingers.values.compactMap { finger -> FingerDot? in
             guard let pt = finger.history.last?.pt else { return nil }
             return FingerDot(id: finger.id, location: pt, isPressed: finger.pressedKeyID != nil)
         }
@@ -413,53 +488,13 @@ class CameraSessionManager: NSObject, ObservableObject {
 
     /// No hands in frame: release everything and forget tracked fingers.
     private func handleNoFingers() {
-        guard !trackedFingers.isEmpty else { return }
-        for finger in trackedFingers where finger.pressedKeyID != nil {
+        guard !fingers.isEmpty || !handTracks.isEmpty else { return }
+        for finger in fingers.values where finger.pressedKeyID != nil {
             releaseKey(finger.pressedKeyID!)
         }
-        trackedFingers.removeAll()
+        fingers.removeAll()
+        handTracks.removeAll()
         DispatchQueue.main.async { [weak self] in self?.overlayModel.frame = nil }
-    }
-
-    /// Associates this frame's fingertips with existing tracked fingers (nearest
-    /// neighbour), spawns new ones, evaluates press/release, and prunes stale fingers.
-    private func updateTracking(with tips: [CGPoint], now: TimeInterval) {
-        var usedTip = Array(repeating: false, count: tips.count)
-
-        // 1. Extend existing tracks with their nearest unused tip.
-        for i in trackedFingers.indices {
-            guard let last = trackedFingers[i].history.last?.pt else { continue }
-            var best = -1
-            var bestDist = assocRadius
-            for (j, tip) in tips.enumerated() where !usedTip[j] {
-                let d = distance(tip, last)
-                if d < bestDist { bestDist = d; best = j }
-            }
-            if best >= 0 {
-                usedTip[best] = true
-                appendHistory(&trackedFingers[i], pt: tips[best], t: now)
-                trackedFingers[i].lastSeen = now
-                evaluatePress(&trackedFingers[i])
-            }
-        }
-
-        // 2. Any leftover tips become newly tracked fingers.
-        for (j, tip) in tips.enumerated() where !usedTip[j] {
-            trackedFingers.append(TrackedFinger(id: nextFingerID,
-                                                history: [(tip, now)],
-                                                pressedKeyID: nil,
-                                                candidateKeyID: nil,
-                                                candidateCount: 0,
-                                                lastSeen: now))
-            nextFingerID += 1
-        }
-
-        // 3. Drop fingers we haven't seen recently, releasing any note they held.
-        trackedFingers.removeAll { finger in
-            let stale = now - finger.lastSeen > fingerTimeout
-            if stale, let keyID = finger.pressedKeyID { releaseKey(keyID) }
-            return stale
-        }
     }
 
     private func appendHistory(_ finger: inout TrackedFinger, pt: CGPoint, t: TimeInterval) {
@@ -494,9 +529,18 @@ class CameraSessionManager: NSObject, ObservableObject {
         if let old = finger.pressedKeyID { releaseKey(old) }
         finger.pressedKeyID = nil
         if let key, key.id == finger.candidateKeyID {
-            pressKey(key, velocity: 0.8)
+            pressKey(key, velocity: arrivalVelocity(of: finger))
             finger.pressedKeyID = key.id
         }
+    }
+
+    /// Expressive dynamics: a fast strike lands loud, a gentle placement soft.
+    /// Speed is measured across the finger's recent history (normalized units/s).
+    private func arrivalVelocity(of finger: TrackedFinger) -> Float {
+        guard let first = finger.history.first, let last = finger.history.last,
+              last.t - first.t > 0.01 else { return 0.7 }
+        let speed = distance(last.pt, first.pt) / (last.t - first.t)
+        return Float(min(1.0, 0.45 + speed * 1.2))
     }
 
     private func distance(_ p: CGPoint, _ q: CGPoint) -> Double {
