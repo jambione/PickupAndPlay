@@ -69,15 +69,32 @@ struct PaperPianoKey: Identifiable {
 
         return keys
     }()
+
+    /// Fast lookup by key id (ids are assigned sequentially from 0 in `layout`).
+    static let byID: [Int: PaperPianoKey] = Dictionary(
+        uniqueKeysWithValues: layout.map { ($0.id, $0) })
 }
 
 // MARK: - Calibration State
 
 struct KeyboardCalibration {
     /// The four corners of the printed keyboard in the camera preview's coordinate space.
-    /// Order: topLeft, topRight, bottomLeft, bottomRight
-    var corners: [CGPoint] = []
+    /// Order: topLeft, topRight, bottomLeft, bottomRight.
+    /// Writes go through `setCorners(_:)` so the homographies stay cached.
+    private(set) var corners: [CGPoint] = []
     var isCalibrated: Bool { corners.count == 4 }
+
+    // Solved once per corner update instead of per fingertip query (up to 10×/frame).
+    private var cachedH: [Double]?      // camera → keyboard
+    private var cachedInvH: [Double]?   // keyboard → camera
+
+    init() {}
+
+    mutating func setCorners(_ newCorners: [CGPoint]) {
+        corners = newCorners
+        cachedH = Self.cameraToKeyboardHomography(corners: newCorners)
+        cachedInvH = Self.keyboardToCameraHomography(corners: newCorners)
+    }
 
     /// Maps a point in camera/preview space to normalized 0…1 keyboard coordinates,
     /// applying a full perspective (keystone) correction from the 4 calibration
@@ -88,24 +105,39 @@ struct KeyboardCalibration {
     /// as the finger tracker does) or in view points (with the real preview size, as
     /// tap input does); it is normalized to the same 0…1 space as `corners` first.
     func normalizedPoint(from previewPt: CGPoint, previewSize: CGSize) -> CGPoint? {
-        guard isCalibrated, previewSize.width > 0, previewSize.height > 0 else { return nil }
+        guard let h = cachedH, previewSize.width > 0, previewSize.height > 0 else { return nil }
         let p = CGPoint(x: previewPt.x / previewSize.width,
                         y: previewPt.y / previewSize.height)
-        guard let h = Self.cameraToKeyboardHomography(corners: corners) else { return nil }
         return Self.apply(h, to: p)
     }
 
+    /// Inverse mapping: a normalized keyboard-space point (0…1) → normalized
+    /// camera/preview space. Used to project key outlines onto the camera feed.
+    func previewPoint(fromKeyboard pt: CGPoint) -> CGPoint? {
+        guard let h = cachedInvH else { return nil }
+        return Self.apply(h, to: pt)
+    }
+
     // MARK: - Perspective (homography) mapping
+
+    /// Keyboard space: x 0→1 left→right, y 0→1 front→back (black keys near y=1).
+    private static let unitKeyboardCorners = [
+        CGPoint(x: 0, y: 1), CGPoint(x: 1, y: 1),
+        CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0)
+    ]
 
     /// Homography mapping the camera's (possibly skewed) keyboard quad → the unit
     /// keyboard rectangle. Corners are re-ordered to TL, TR, BL, BR so the result is
     /// robust to the order they were captured/tapped in.
     private static func cameraToKeyboardHomography(corners: [CGPoint]) -> [Double]? {
         guard let c = orderedCorners(corners) else { return nil }
-        // Keyboard space: x 0→1 left→right, y 0→1 front→back (black keys near y=1).
-        let dst = [CGPoint(x: 0, y: 1), CGPoint(x: 1, y: 1),
-                   CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0)]
-        return solveHomography(src: c, dst: dst)
+        return solveHomography(src: c, dst: unitKeyboardCorners)
+    }
+
+    /// Inverse: unit keyboard rectangle → camera quad.
+    private static func keyboardToCameraHomography(corners: [CGPoint]) -> [Double]? {
+        guard let c = orderedCorners(corners) else { return nil }
+        return solveHomography(src: unitKeyboardCorners, dst: c)
     }
 
     /// Sorts 4 points into [topLeft, topRight, bottomLeft, bottomRight]
@@ -181,10 +213,19 @@ struct KeyboardCalibration {
     }
 }
 
-// MARK: - Vision Detection Result
+// MARK: - Finger Overlay Frame
 
-struct FingerDetectionResult {
-    let fingerTips: [CGPoint]      // in normalized 0…1 camera coordinates
+/// One fingertip as rendered by the camera overlay.
+struct FingerDot: Identifiable {
+    let id: Int                    // stable per tracked finger
+    let location: CGPoint          // normalized 0…1 camera coordinates
+    let isPressed: Bool            // currently sounding a note
+}
+
+/// A per-frame snapshot of all tracked fingertips, published as one unit so only
+/// the lightweight overlay view re-renders at camera frame rate.
+struct OverlayFrame {
+    let fingers: [FingerDot]
     let timestamp: TimeInterval
 }
 

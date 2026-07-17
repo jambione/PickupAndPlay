@@ -8,6 +8,14 @@ import SwiftUI
 import UIKit
 #endif
 
+// MARK: - Finger Overlay Model
+
+/// Isolated frame-rate publisher: only the fingertip overlay observes this, so
+/// 60 Hz updates don't re-render the rest of the play screen.
+final class FingerOverlayModel: ObservableObject {
+    @Published var frame: OverlayFrame?
+}
+
 // MARK: - Camera Session Manager
 
 class CameraSessionManager: NSObject, ObservableObject {
@@ -17,13 +25,15 @@ class CameraSessionManager: NSObject, ObservableObject {
     @Published var previewLayer: AVCaptureVideoPreviewLayer?
     @Published var isRunning = false
     @Published var isAuthorized = false
-    @Published var latestFingerResult: FingerDetectionResult? = nil
     @Published var calibration = KeyboardCalibration()
     @Published var activeNotes: [ActiveNote] = []
-    @Published var detectedCorners: [CGPoint] = []   // orange corner markers found by Vision
+    @Published var detectedCorners: [CGPoint] = []   // QR corner markers found by Vision
     @Published var calibrationState: CalibrationState = .idle
     @Published var authStatus: CameraAuthStatus = .unknown
     @Published var zoomFactor: CGFloat = 1.0
+
+    /// Frame-rate fingertip positions for the camera overlay (separate publisher).
+    let overlayModel = FingerOverlayModel()
 
     enum CalibrationState {
         case idle
@@ -53,6 +63,19 @@ class CameraSessionManager: NSObject, ObservableObject {
     // Debounce rapid note triggers (manual taps only)
     private var lastNoteTime: [Int: Date] = [:]
     private let noteDebounce: TimeInterval = 0.15
+
+    // MARK: Video-queue-owned state
+    // The video queue owns the calibration used for hit-testing plus the set of
+    // sounding keys, so the finger→audio path never waits on the main thread.
+    // (`calibration` above is the display copy for taps/overlays.)
+    private var liveCalibration = KeyboardCalibration()
+    private var isCalibratedOnVideoQueue = false
+    private var pressedKeyIDs: Set<Int> = []
+    private var frameIndex = 0
+
+    /// QR re-detection cadence once calibrated (every Nth frame ≈ 10 Hz at 60 fps —
+    /// plenty, since corner smoothing low-passes anyway). Scanning runs every frame.
+    private let qrFrameStride = 6
 
     // MARK: Press detection (camera hand-tracking)
 
@@ -149,9 +172,27 @@ class CameraSessionManager: NSObject, ObservableObject {
 
     // MARK: - Session Setup
 
+    /// Target capture rate. Drop to 30 if 60 proves too heavy thermally.
+    private let targetFrameRate = 60.0
+
+    /// Smallest ≥720p format that supports `targetFrameRate` — high frame rate
+    /// without paying for pixels Vision doesn't need.
+    private func bestFormat(for device: AVCaptureDevice) -> AVCaptureDevice.Format? {
+        var best: AVCaptureDevice.Format?
+        var bestPixels = Int.max
+        for format in device.formats {
+            let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            guard dims.height >= 720, dims.height <= 1080 else { continue }
+            guard format.videoSupportedFrameRateRanges.contains(where: { $0.maxFrameRate >= targetFrameRate })
+            else { continue }
+            let pixels = Int(dims.width) * Int(dims.height)
+            if pixels < bestPixels { bestPixels = pixels; best = format }
+        }
+        return best
+    }
+
     private func setupSession() {
         session.beginConfiguration()
-        session.sessionPreset = .hd1280x720
 
         // Input — prefer back camera on iOS, built-in on Mac
         let deviceTypes: [AVCaptureDevice.DeviceType] = [
@@ -169,6 +210,23 @@ class CameraSessionManager: NSObject, ObservableObject {
         }
         captureDevice = device
         if session.canAddInput(input) { session.addInput(input) }
+
+        // High frame rate: pick a 60 fps-capable format where available
+        // (.inputPriority so the preset doesn't override it); else 720p default.
+        if let format = bestFormat(for: device),
+           (try? device.lockForConfiguration()) != nil {
+            session.sessionPreset = .inputPriority
+            device.activeFormat = format
+            let duration = CMTime(value: 1, timescale: CMTimeScale(targetFrameRate))
+            device.activeVideoMinFrameDuration = duration
+            device.activeVideoMaxFrameDuration = duration
+            device.unlockForConfiguration()
+            let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            print("📷 capture format: \(dims.width)x\(dims.height) @ \(Int(targetFrameRate))fps")
+        } else {
+            session.sessionPreset = .hd1280x720
+            print("📷 capture format: 1280x720 @ default fps (no 60fps format)")
+        }
 
         // Output
         videoOutput.setSampleBufferDelegate(self, queue: videoQueue)
@@ -193,9 +251,11 @@ class CameraSessionManager: NSObject, ObservableObject {
             #endif
         }
 
-        // Configure Vision requests
+        // Configure Vision requests. Use the newest hand-pose model available
+        // (revert to VNDetectHumanHandPoseRequestRevision1 if it regresses).
         handPoseRequest.maximumHandCount = 2
-        handPoseRequest.revision = VNDetectHumanHandPoseRequestRevision1
+        handPoseRequest.revision = VNDetectHumanHandPoseRequest.supportedRevisions.max()
+            ?? VNDetectHumanHandPoseRequestRevision1
         barcodeRequest.symbologies = [.qr]
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -228,13 +288,17 @@ class CameraSessionManager: NSObject, ObservableObject {
     }
     #endif
 
-    // MARK: - Manual Calibration (tap fallback)
+    // MARK: - Calibration (single write funnel)
 
-    func addCalibrationCorner(_ point: CGPoint) {
-        guard calibration.corners.count < 4 else { return }
-        calibration.corners.append(point)
-        if calibration.corners.count == 4 {
-            calibrationState = .calibrated
+    /// The only way calibration corners are set from outside the video queue.
+    /// Updates the main-thread display copy and mirrors into the video-queue-owned
+    /// copy used for hit-testing.
+    func setCalibrationCorners(_ corners: [CGPoint]) {
+        calibration.setCorners(corners)
+        videoQueue.async { [weak self] in
+            guard let self else { return }
+            self.liveCalibration.setCorners(corners)
+            self.isCalibratedOnVideoQueue = corners.count == 4
         }
     }
 
@@ -242,10 +306,21 @@ class CameraSessionManager: NSObject, ObservableObject {
         calibration = KeyboardCalibration()
         calibrationState = .idle
         detectedCorners = []
+        videoQueue.async { [weak self] in
+            guard let self else { return }
+            self.liveCalibration = KeyboardCalibration()
+            self.isCalibratedOnVideoQueue = false
+            self.trackedFingers.removeAll()
+            for id in self.pressedKeyIDs {
+                if let key = PaperPianoKey.byID[id] { PianoAudioEngine.shared.stopNote(key: key) }
+            }
+            self.pressedKeyIDs.removeAll()
+            DispatchQueue.main.async { self.activeNotes.removeAll() }
+        }
     }
 
     func confirmAutoCalibration() {
-        calibration.corners = detectedCorners
+        setCalibrationCorners(detectedCorners)
         calibrationState = .calibrated
     }
 
@@ -284,21 +359,22 @@ class CameraSessionManager: NSObject, ObservableObject {
 
     private func processFrame(_ sampleBuffer: CMSampleBuffer) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        frameIndex &+= 1
 
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer,
                                             orientation: .up, options: [:])
 
-        // Hand pose + QR corner detection in one pass.
-        try? handler.perform([handPoseRequest, barcodeRequest])
-        processHandPose()
+        // QR corner detection runs every frame while scanning, but only every Nth
+        // frame once calibrated — the keyboard barely moves and smoothing covers it.
+        let runQR = !isCalibratedOnVideoQueue || frameIndex % qrFrameStride == 0
+        try? handler.perform(runQR ? [handPoseRequest, barcodeRequest] : [handPoseRequest])
 
-        // Find the corner QR codes every frame — for initial calibration and to keep
-        // tracking the keyboard as the phone/paper moves during play.
-        detectQRCorners(barcodeRequest.results ?? [])
+        processHandPose()
+        if runQR { detectQRCorners(barcodeRequest.results ?? []) }
     }
 
     private func processHandPose() {
-        guard calibration.isCalibrated else { return }
+        guard isCalibratedOnVideoQueue else { return }
         guard let observations = handPoseRequest.results, !observations.isEmpty else {
             handleNoFingers()
             return
@@ -319,11 +395,18 @@ class CameraSessionManager: NSObject, ObservableObject {
             }
         }
 
-        // Publish tips for the fingertip overlay
-        let result = FingerDetectionResult(fingerTips: fingerTips, timestamp: now)
-        DispatchQueue.main.async { [weak self] in self?.latestFingerResult = result }
-
         updateTracking(with: fingerTips, now: now)
+        publishOverlay(timestamp: now)
+    }
+
+    /// One coalesced main-thread publish per frame, consumed only by the overlay view.
+    private func publishOverlay(timestamp: TimeInterval) {
+        let dots = trackedFingers.compactMap { finger -> FingerDot? in
+            guard let pt = finger.history.last?.pt else { return nil }
+            return FingerDot(id: finger.id, location: pt, isPressed: finger.pressedKeyID != nil)
+        }
+        let frame = OverlayFrame(fingers: dots, timestamp: timestamp)
+        DispatchQueue.main.async { [weak self] in self?.overlayModel.frame = frame }
     }
 
     // MARK: - Finger Tracking & Press Detection
@@ -335,7 +418,7 @@ class CameraSessionManager: NSObject, ObservableObject {
             releaseKey(finger.pressedKeyID!)
         }
         trackedFingers.removeAll()
-        DispatchQueue.main.async { [weak self] in self?.latestFingerResult = nil }
+        DispatchQueue.main.async { [weak self] in self?.overlayModel.frame = nil }
     }
 
     /// Associates this frame's fingertips with existing tracked fingers (nearest
@@ -394,7 +477,7 @@ class CameraSessionManager: NSObject, ObservableObject {
     /// lifting out of frame releases.
     private func evaluatePress(_ finger: inout TrackedFinger) {
         guard let pt = finger.history.last?.pt else { return }
-        let key = calibration.key(at: pt, previewSize: CGSize(width: 1, height: 1))
+        let key = liveCalibration.key(at: pt, previewSize: CGSize(width: 1, height: 1))
         let currentKeyID = key?.id
 
         // Confirm the key is stable for a couple of frames before acting on it.
@@ -420,23 +503,28 @@ class CameraSessionManager: NSObject, ObservableObject {
         Double(hypot(p.x - q.x, p.y - q.y))
     }
 
-    /// Note-on for a sustained press (held until `releaseKey`).
+    /// Note-on for a sustained press (held until `releaseKey`). Audio fires
+    /// directly from the video queue — no main-thread hop in the sound path.
     private func pressKey(_ key: PaperPianoKey, velocity: Float) {
+        guard !pressedKeyIDs.contains(key.id) else { return }
+        pressedKeyIDs.insert(key.id)
+        PianoAudioEngine.shared.holdNote(key: key, velocity: velocity)
+
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            guard !self.activeNotes.contains(where: { $0.key.id == key.id }) else { return }
+            self.activeNotes.removeAll { $0.key.id == key.id }
             self.activeNotes.append(ActiveNote(key: key, startTime: Date(), velocity: velocity))
-            PianoAudioEngine.shared.holdNote(key: key, velocity: velocity)
         }
     }
 
     /// Note-off for a previously pressed key.
     private func releaseKey(_ keyID: Int) {
+        guard pressedKeyIDs.remove(keyID) != nil else { return }
+        if let key = PaperPianoKey.byID[keyID] {
+            PianoAudioEngine.shared.stopNote(key: key)
+        }
         DispatchQueue.main.async { [weak self] in
-            guard let self,
-                  let note = self.activeNotes.first(where: { $0.key.id == keyID }) else { return }
-            self.activeNotes.removeAll { $0.key.id == keyID }
-            PianoAudioEngine.shared.stopNote(key: note.key)
+            self?.activeNotes.removeAll { $0.key.id == keyID }
         }
     }
 
@@ -465,29 +553,34 @@ class CameraSessionManager: NSObject, ObservableObject {
     private func markersFound(_ corners: [CGPoint]) {
         cornerStableCount += 1
         let stable = cornerStableCount
+
+        if isCalibratedOnVideoQueue {
+            // Live re-calibration on the video queue: follow the paper as the
+            // phone/paper moves. Reject jumps (occlusion / false positives) and
+            // low-pass smooth, then mirror the display copy to the main thread.
+            let old = liveCalibration.corners
+            let smoothed: [CGPoint]
+            if old.count == 4 {
+                let sane = zip(old, corners).allSatisfy {
+                    hypot($0.x - $1.x, $0.y - $1.y) < 0.2
+                }
+                guard sane else { return }
+                smoothed = zip(old, corners).map {
+                    CGPoint(x: 0.6 * $0.x + 0.4 * $1.x,
+                            y: 0.6 * $0.y + 0.4 * $1.y)
+                }
+            } else {
+                smoothed = corners
+            }
+            liveCalibration.setCorners(smoothed)
+            DispatchQueue.main.async { [weak self] in
+                self?.calibration.setCorners(smoothed)
+            }
+            return
+        }
+
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-
-            if self.calibrationState == .calibrated {
-                // Live re-calibration: follow the paper as the phone/paper moves.
-                // Reject jumps (occlusion / false positives) and low-pass smooth.
-                let old = self.calibration.corners
-                if old.count == 4 {
-                    let sane = zip(old, corners).allSatisfy {
-                        hypot($0.x - $1.x, $0.y - $1.y) < 0.2
-                    }
-                    if sane {
-                        self.calibration.corners = zip(old, corners).map {
-                            CGPoint(x: 0.6 * $0.x + 0.4 * $1.x,
-                                    y: 0.6 * $0.y + 0.4 * $1.y)
-                        }
-                    }
-                } else {
-                    self.calibration.corners = corners
-                }
-                return
-            }
-
             self.detectedCorners = corners
             // Require a few consistent frames before offering to confirm.
             if stable >= 3, self.calibrationState == .idle || self.calibrationState == .scanning {
@@ -500,6 +593,9 @@ class CameraSessionManager: NSObject, ObservableObject {
 
     private func markersLost() {
         cornerStableCount = 0
+        // While calibrated, a missed detection just means the corners hold their
+        // last smoothed position — nothing to publish.
+        guard !isCalibratedOnVideoQueue else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             if self.calibrationState == .aligned || self.calibrationState == .scanning {

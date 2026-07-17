@@ -123,10 +123,31 @@ private struct ScanningView: View {
         guard manualCorners.count < 4 else { return }
         manualCorners.append(pt)
         if manualCorners.count == 4 {
-            camera.calibration.corners = manualCorners.map {
+            camera.setCalibrationCorners(manualCorners.map {
                 CGPoint(x: $0.x / size.width, y: $0.y / size.height)
-            }
+            })
             camera.calibrationState = .calibrated
+        }
+    }
+}
+
+// MARK: - Fingertip Overlay
+
+/// Draws tracked fingertips over the camera feed. Observes only the isolated
+/// frame-rate publisher, so 60 Hz updates re-render just this Canvas.
+private struct FingertipOverlay: View {
+    @ObservedObject var model: FingerOverlayModel
+
+    var body: some View {
+        Canvas { context, size in
+            guard let frame = model.frame else { return }
+            for dot in frame.fingers {
+                let rect = CGRect(x: dot.location.x * size.width - 7,
+                                  y: dot.location.y * size.height - 7,
+                                  width: 14, height: 14)
+                let color: Color = dot.isPressed ? .green : .yellow.opacity(0.85)
+                context.fill(Ellipse().path(in: rect), with: .color(color))
+            }
         }
     }
 }
@@ -237,16 +258,8 @@ private struct PlayView: View {
         VStack(spacing: 0) {
             ZStack {
                 CameraPreviewView(camera: camera) { pt, size in camera.handleTap(at: pt, previewSize: size) }
-                GeometryReader { geo in
-                    if let result = camera.latestFingerResult {
-                        ForEach(result.fingerTips.indices, id: \.self) { i in
-                            let pt = result.fingerTips[i]
-                            Circle().fill(Color.yellow.opacity(0.85)).frame(width: 14, height: 14)
-                                .shadow(color: .yellow, radius: 4)
-                                .position(x: pt.x * geo.size.width, y: pt.y * geo.size.height)
-                        }
-                    }
-                }
+                FingertipOverlay(model: camera.overlayModel)
+                    .allowsHitTesting(false)
                 VStack {
                     HStack {
                         ActiveNoteBar(activeNotes: camera.activeNotes)
