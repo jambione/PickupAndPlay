@@ -22,57 +22,98 @@ struct PaperPianoKey: Identifiable {
         return 440.0 * pow(2.0, semitones / 12.0)
     }
 
-    // MARK: - Static layout for 3 octaves C3–C6 (matches the 3-octave printed PDF)
+    // MARK: - Layouts (one per printed sheet variant)
 
-    static let layout: [PaperPianoKey] = {
-        // White keys: C3–C6 (22 white keys, 3 full octaves + top C)
-        let whites: [(NotePitch, Int)] = [
-            (.C,3),(.D,3),(.E,3),(.F,3),(.G,3),(.A,3),(.B,3),
-            (.C,4),(.D,4),(.E,4),(.F,4),(.G,4),(.A,4),(.B,4),
-            (.C,5),(.D,5),(.E,5),(.F,5),(.G,5),(.A,5),(.B,5),
-            (.C,6)
-        ]
-        // Black keys: (pitch, octave, leftWhiteIndex)
-        let blacks: [(NotePitch, Int, Int)] = [
-            (.CSharp,3,0), (.DSharp,3,1), (.FSharp,3,3), (.GSharp,3,4), (.ASharp,3,5),
-            (.CSharp,4,7), (.DSharp,4,8), (.FSharp,4,10),(.GSharp,4,11),(.ASharp,4,12),
-            (.CSharp,5,14),(.DSharp,5,15),(.FSharp,5,17),(.GSharp,5,18),(.ASharp,5,19),
-        ]
-
+    /// Builds a keyboard layout: whites evenly dividing the width, blacks on top.
+    /// Proportions match a real piano (black ≈ 60% of white width, 62% of length),
+    /// so the printed sheets can use true key dimensions.
+    private static func makeLayout(whites: [(NotePitch, Int)],
+                                   blacks: [(NotePitch, Int, Int)]) -> [PaperPianoKey] {
         var keys: [PaperPianoKey] = []
         var id = 0
+        let fw = 1.0 / Double(whites.count)
 
-        // Add white keys first
         for (i, (pitch, oct)) in whites.enumerated() {
             var k = PaperPianoKey(id: id, note: pitch, octave: oct,
                                    isBlack: false, whiteKeyIndex: i, blackKeyOffset: 0)
-            // Normalized frame: evenly divide the width
-            let fw = 1.0 / Double(whites.count)
             k.normalizedFrame = CGRect(x: fw * Double(i), y: 0, width: fw, height: 1.0)
             keys.append(k)
             id += 1
         }
-
-        // Add black keys on top
         for (pitch, oct, leftIdx) in blacks {
-            let fw = 1.0 / Double(whites.count)
-            let bw = fw * 0.6          // black key is 60% of white width
-            let bh = 0.62              // black key is 62% of keyboard height (from top)
+            let bw = fw * 0.6
+            let bh = 0.62
             let bx = fw * Double(leftIdx) + fw - bw / 2.0  // centered at the gap
-
             var k = PaperPianoKey(id: id, note: pitch, octave: oct,
                                    isBlack: true, whiteKeyIndex: leftIdx, blackKeyOffset: 0.5)
             k.normalizedFrame = CGRect(x: bx, y: 1.0 - bh, width: bw, height: bh)
             keys.append(k)
             id += 1
         }
-
         return keys
-    }()
+    }
 
-    /// Fast lookup by key id (ids are assigned sequentially from 0 in `layout`).
-    static let byID: [Int: PaperPianoKey] = Dictionary(
-        uniqueKeysWithValues: layout.map { ($0.id, $0) })
+    /// 3 octaves C3–C6: 22 white + 15 black keys.
+    static let threeOctaveLayout: [PaperPianoKey] = makeLayout(
+        whites: [
+            (.C,3),(.D,3),(.E,3),(.F,3),(.G,3),(.A,3),(.B,3),
+            (.C,4),(.D,4),(.E,4),(.F,4),(.G,4),(.A,4),(.B,4),
+            (.C,5),(.D,5),(.E,5),(.F,5),(.G,5),(.A,5),(.B,5),
+            (.C,6)
+        ],
+        blacks: [
+            (.CSharp,3,0), (.DSharp,3,1), (.FSharp,3,3), (.GSharp,3,4), (.ASharp,3,5),
+            (.CSharp,4,7), (.DSharp,4,8), (.FSharp,4,10),(.GSharp,4,11),(.ASharp,4,12),
+            (.CSharp,5,14),(.DSharp,5,15),(.FSharp,5,17),(.GSharp,5,18),(.ASharp,5,19),
+        ])
+
+    /// 2 octaves C3–C5: 15 white + 10 black keys (true-size single-A3 sheet).
+    static let twoOctaveLayout: [PaperPianoKey] = makeLayout(
+        whites: [
+            (.C,3),(.D,3),(.E,3),(.F,3),(.G,3),(.A,3),(.B,3),
+            (.C,4),(.D,4),(.E,4),(.F,4),(.G,4),(.A,4),(.B,4),
+            (.C,5)
+        ],
+        blacks: [
+            (.CSharp,3,0), (.DSharp,3,1), (.FSharp,3,3), (.GSharp,3,4), (.ASharp,3,5),
+            (.CSharp,4,7), (.DSharp,4,8), (.FSharp,4,10),(.GSharp,4,11),(.ASharp,4,12),
+        ])
+
+    /// Legacy alias: the 3-octave layout (existing call sites; prefer variant APIs).
+    static var layout: [PaperPianoKey] { threeOctaveLayout }
+
+    static func layout(for variant: KeyboardVariant) -> [PaperPianoKey] {
+        switch variant {
+        case .threeOctave: return threeOctaveLayout
+        case .twoOctave:   return twoOctaveLayout
+        }
+    }
+
+    private static let byIDThree = Dictionary(uniqueKeysWithValues: threeOctaveLayout.map { ($0.id, $0) })
+    private static let byIDTwo = Dictionary(uniqueKeysWithValues: twoOctaveLayout.map { ($0.id, $0) })
+
+    static func byID(_ id: Int, variant: KeyboardVariant) -> PaperPianoKey? {
+        switch variant {
+        case .threeOctave: return byIDThree[id]
+        case .twoOctave:   return byIDTwo[id]
+        }
+    }
+}
+
+// MARK: - Keyboard Variant
+
+/// Which printed sheet is in front of the camera. Encoded in the corner QR
+/// payloads (`TAPNOTE:TL` = 3-octave legacy, `TAPNOTE:2:TL` = 2-octave), so the
+/// paper identifies itself and the app switches layouts automatically.
+enum KeyboardVariant: String, CaseIterable {
+    case threeOctave, twoOctave
+
+    var displayName: String {
+        switch self {
+        case .threeOctave: return "3 octaves"
+        case .twoOctave:   return "2 octaves"
+        }
+    }
 }
 
 // MARK: - Calibration State
@@ -84,6 +125,9 @@ struct KeyboardCalibration {
     /// Writes go through `setCorners(_:)` so the homographies stay cached.
     private(set) var corners: [CGPoint] = []
     var isCalibrated: Bool { corners.count == 4 }
+
+    /// Which printed sheet these corners belong to (drives key hit-testing).
+    var variant: KeyboardVariant = .threeOctave
 
     // Solved once per corner update instead of per fingertip query (up to 10×/frame).
     private var cachedH: [Double]?      // camera → keyboard
@@ -197,13 +241,16 @@ struct KeyboardCalibration {
         return x
     }
 
-    /// Returns which piano key (if any) a preview-space touch point lands on.
+    /// Returns which piano key (if any) a preview-space touch point lands on,
+    /// against the active sheet variant's layout.
     func key(at previewPt: CGPoint, previewSize: CGSize) -> PaperPianoKey? {
         guard let norm = normalizedPoint(from: previewPt, previewSize: previewSize) else { return nil }
+        let layout = PaperPianoKey.layout(for: variant)
         // Check black keys first (they sit on top)
-        let blacks = PaperPianoKey.layout.filter { $0.isBlack }
-        let whites = PaperPianoKey.layout.filter { !$0.isBlack }
-        for key in blacks + whites {
+        for key in layout where key.isBlack {
+            if key.normalizedFrame.contains(norm) { return key }
+        }
+        for key in layout where !key.isBlack {
             if key.normalizedFrame.contains(norm) { return key }
         }
         return nil

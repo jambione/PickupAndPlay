@@ -8,15 +8,17 @@ struct VirtualPianoView: View {
     let activeNotes: [ActiveNote]
     var onKeyTap: ((PaperPianoKey) -> Void)? = nil
 
-    private let keys = PaperPianoKey.layout
     private let whites: [PaperPianoKey]
     private let blacks: [PaperPianoKey]
 
-    init(activeNotes: [ActiveNote], onKeyTap: ((PaperPianoKey) -> Void)? = nil) {
+    init(activeNotes: [ActiveNote],
+         variant: KeyboardVariant = .threeOctave,
+         onKeyTap: ((PaperPianoKey) -> Void)? = nil) {
         self.activeNotes = activeNotes
         self.onKeyTap = onKeyTap
-        whites = PaperPianoKey.layout.filter { !$0.isBlack }
-        blacks = PaperPianoKey.layout.filter { $0.isBlack }
+        let layout = PaperPianoKey.layout(for: variant)
+        whites = layout.filter { !$0.isBlack }
+        blacks = layout.filter { $0.isBlack }
     }
 
     var body: some View {
@@ -192,9 +194,11 @@ private struct BlackKeyView: View {
 struct NoteRippleOverlay: View {
     let activeNotes: [ActiveNote]
     let containerSize: CGSize
+    var variant: KeyboardVariant = .threeOctave
 
-    private let whites = PaperPianoKey.layout.filter { !$0.isBlack }
-    private let totalWhites = PaperPianoKey.layout.filter { !$0.isBlack }.count
+    private var totalWhites: Int {
+        PaperPianoKey.layout(for: variant).filter { !$0.isBlack }.count
+    }
 
     var body: some View {
         ZStack {

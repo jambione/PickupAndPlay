@@ -75,13 +75,16 @@ struct PaperPianoView: View {
                 if showKeyboard {
                     ZStack {
                         Color(white: 0.07)
-                        VirtualPianoView(activeNotes: camera.activeNotes) { key in
+                        VirtualPianoView(activeNotes: camera.activeNotes,
+                                         variant: camera.activeVariant) { key in
                             camera.triggerKey(key, velocity: 0.85)
                         }
+                        .id(camera.activeVariant)
                         .padding(.horizontal, 4).padding(.vertical, 6)
                         GeometryReader { geo in
                             NoteRippleOverlay(activeNotes: camera.activeNotes,
-                                              containerSize: CGSize(width: geo.size.width, height: keyboardHeight))
+                                              containerSize: CGSize(width: geo.size.width, height: keyboardHeight),
+                                              variant: camera.activeVariant)
                         }
                     }
                     .frame(height: keyboardHeight)
@@ -230,6 +233,23 @@ private struct RegistrationOverlay: View {
                         .foregroundColor(.white)
                 }
                 if manualMode {
+                    // Manual taps carry no QR payload, so the sheet variant is
+                    // chosen by hand here.
+                    HStack(spacing: 8) {
+                        ForEach(KeyboardVariant.allCases, id: \.self) { variant in
+                            let selected = camera.activeVariant == variant
+                            Button {
+                                camera.setKeyboardVariant(variant)
+                            } label: {
+                                Text(variant.displayName)
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                    .foregroundColor(selected ? .white : .white.opacity(0.6))
+                                    .padding(.horizontal, 10).padding(.vertical, 5)
+                                    .background(selected ? Color.indigo : Color.white.opacity(0.1), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                     // Taps must follow the paper's canonical corner order — the
                     // homography relies on identity, not on-screen position, so the
                     // keyboard can sit at any rotation in frame.
@@ -311,7 +331,7 @@ private struct RegistrationOverlay: View {
         let count = camera.foundMarkers.count
         switch count {
         case 0:  return "Point at the printed keyboard"
-        case 4:  return "All corners found — hold steady…"
+        case 4:  return "\(camera.activeVariant.displayName) sheet found — hold steady…"
         default: return "Found \(count) of 4 QR corners"
         }
     }
@@ -319,11 +339,12 @@ private struct RegistrationOverlay: View {
     /// Step-by-step prompt naming which printed QR corner to tap next, in the
     /// paper's canonical TL → TR → BL → BR order.
     private var manualPrompt: String {
+        let top = camera.activeVariant == .twoOctave ? "C5" : "C6"
         let steps = [
             "Tap the ↖ top-left QR (back edge, behind the lowest C3)",
-            "Tap the ↗ top-right QR (back edge, behind the highest C6)",
+            "Tap the ↗ top-right QR (back edge, behind the highest \(top))",
             "Tap the ↙ bottom-left QR (front edge, by C3)",
-            "Tap the ↘ bottom-right QR (front edge, by C6)",
+            "Tap the ↘ bottom-right QR (front edge, by \(top))",
         ]
         return manualCorners.count < 4 ? steps[manualCorners.count] : "All corners set"
     }
@@ -523,7 +544,7 @@ private struct KeyboardProjectionOverlay: View {
                 return path
             }
 
-            for key in PaperPianoKey.layout {
+            for key in PaperPianoKey.layout(for: calibration.variant) {
                 guard let path = quad(key.normalizedFrame) else { continue }
                 if activeKeyIDs.contains(key.id) {
                     ctx.fill(path, with: .color(.indigo.opacity(0.4)))
@@ -663,10 +684,10 @@ struct PrintInstructionsView: View {
                     Text("Print Your Paper Piano")
                         .font(.system(size: 24, weight: .bold, design: .rounded))
                     VStack(alignment: .leading, spacing: 16) {
-                        PrintStep(number: "1", title: "Get the PDF",
-                                  description: "Tap below to share the 3-octave keyboard PDF — AirDrop it, save to Files, or print directly.")
-                        PrintStep(number: "2", title: "Print big & flat",
-                                  description: "A2 is ideal; tiling 2× A3 (or 4× A4) at 100% scale works too.")
+                        PrintStep(number: "1", title: "Pick a sheet — keys are REAL piano size",
+                                  description: "2-octave: one A3 page, print and play. 3-octave: two A3 pages taped at the marked seam. The app reads the QR corners and adapts automatically.")
+                        PrintStep(number: "2", title: "Print at 100% scale",
+                                  description: "Turn OFF 'fit to page' — scaling shrinks the keys. A3 landscape.")
                         PrintStep(number: "3", title: "Lay flat on a table",
                                   description: "Place in a well-lit area. Avoid glare from overhead lights.")
                         PrintStep(number: "4", title: "Point the camera",
@@ -675,19 +696,25 @@ struct PrintInstructionsView: View {
                                   description: "Tap keys with your fingers — every finger plays its own note.")
                     }
                     .padding(.horizontal, 24)
-                    if let pdfURL = Bundle.main.url(forResource: "TapNote_Keyboard_QR", withExtension: "pdf") {
-                        ShareLink(item: pdfURL) {
-                            Label("Share Piano PDF", systemImage: "square.and.arrow.up.fill")
-                                .font(.system(size: 16, weight: .semibold)).foregroundColor(.white)
-                                .frame(maxWidth: .infinity).padding(.vertical, 14)
-                                .background(Color.indigo).cornerRadius(14)
+                    VStack(spacing: 10) {
+                        if let url = Bundle.main.url(forResource: "TapNote_Keyboard_2oct_A3", withExtension: "pdf") {
+                            ShareLink(item: url) {
+                                Label("2-Octave Sheet — one A3 page", systemImage: "square.and.arrow.up.fill")
+                                    .font(.system(size: 16, weight: .semibold)).foregroundColor(.white)
+                                    .frame(maxWidth: .infinity).padding(.vertical, 14)
+                                    .background(Color.indigo).cornerRadius(14)
+                            }
                         }
-                        .padding(.horizontal, 24).padding(.bottom, 30)
-                    } else {
-                        Label("PDF unavailable", systemImage: "exclamationmark.triangle")
-                            .font(.system(size: 14)).foregroundColor(.secondary)
-                            .padding(.bottom, 30)
+                        if let url = Bundle.main.url(forResource: "TapNote_Keyboard_3oct_2xA3", withExtension: "pdf") {
+                            ShareLink(item: url) {
+                                Label("3-Octave Sheet — 2 pages, tape together", systemImage: "square.and.arrow.up")
+                                    .font(.system(size: 16, weight: .semibold)).foregroundColor(.indigo)
+                                    .frame(maxWidth: .infinity).padding(.vertical, 14)
+                                    .background(Color.indigo.opacity(0.12)).cornerRadius(14)
+                            }
+                        }
                     }
+                    .padding(.horizontal, 24).padding(.bottom, 30)
                 }
             }
             .navigationTitle("Setup Guide")

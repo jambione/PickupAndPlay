@@ -50,6 +50,9 @@ class CameraSessionManager: NSObject, ObservableObject {
     /// corner individually and show which ones are still missing.
     @Published var foundMarkers: [String: CGPoint] = [:]
 
+    /// Which printed sheet is active (auto-detected from the QR payloads).
+    @Published var activeVariant: KeyboardVariant = .threeOctave
+
     /// What auto-frame is currently doing (nil = idle/satisfied).
     @Published var autoFrameHint: AutoFrameHint?
 
@@ -93,6 +96,7 @@ class CameraSessionManager: NSObject, ObservableObject {
     // (`calibration` above is the display copy for taps/overlays.)
     private var liveCalibration = KeyboardCalibration()
     private var isCalibratedOnVideoQueue = false
+    private var currentVariantVQ: KeyboardVariant = .threeOctave
     private var pressedKeyIDs: Set<Int> = []
     private var frameIndex = 0
 
@@ -416,7 +420,9 @@ class CameraSessionManager: NSObject, ObservableObject {
             self.fingers.removeAll()
             self.handTracks.removeAll()
             for id in self.pressedKeyIDs {
-                if let key = PaperPianoKey.byID[id] { PianoAudioEngine.shared.stopNote(key: key) }
+                if let key = PaperPianoKey.byID(id, variant: self.currentVariantVQ) {
+                    PianoAudioEngine.shared.stopNote(key: key)
+                }
             }
             self.pressedKeyIDs.removeAll()
             DispatchQueue.main.async { self.activeNotes.removeAll() }
@@ -661,7 +667,7 @@ class CameraSessionManager: NSObject, ObservableObject {
     /// Note-off for a previously pressed key.
     private func releaseKey(_ keyID: Int) {
         guard pressedKeyIDs.remove(keyID) != nil else { return }
-        if let key = PaperPianoKey.byID[keyID] {
+        if let key = PaperPianoKey.byID(keyID, variant: currentVariantVQ) {
             PianoAudioEngine.shared.stopNote(key: key)
         }
         DispatchQueue.main.async { [weak self] in
@@ -684,17 +690,32 @@ class CameraSessionManager: NSObject, ObservableObject {
     private let markerGrace: TimeInterval = 0.4
 
     /// Locates the keyboard from the four corner QR codes. Each QR encodes its
-    /// corner ("TAPNOTE:TL/TR/BL/BR"), so detection is unambiguous and robust to
-    /// lighting and angle — Vision returns each code's position directly.
+    /// corner and sheet variant ("TAPNOTE:TL" = 3-octave legacy, "TAPNOTE:2:TL"
+    /// = 2-octave), so the paper identifies itself: detection is unambiguous,
+    /// robust to lighting/angle, and the app switches key layouts automatically.
     private func detectQRCorners(_ results: [VNBarcodeObservation], now: TimeInterval) {
-        var found: [String: CGPoint] = [:]
+        var byVariant: [KeyboardVariant: [String: CGPoint]] = [:]
         for obs in results {
             guard let payload = obs.payloadStringValue,
                   payload.hasPrefix("TAPNOTE:") else { continue }
+            var suffix = String(payload.dropFirst("TAPNOTE:".count))
+            var variant: KeyboardVariant = .threeOctave
+            if suffix.hasPrefix("2:") { variant = .twoOctave; suffix = String(suffix.dropFirst(2)) }
+            else if suffix.hasPrefix("3:") { suffix = String(suffix.dropFirst(2)) }
             // boundingBox is normalized with a bottom-left origin — flip Y to match
             // the fingertip coordinate space.
             let center = CGPoint(x: obs.boundingBox.midX, y: 1 - obs.boundingBox.midY)
-            found[String(payload.dropFirst("TAPNOTE:".count))] = center
+            byVariant[variant, default: [:]][suffix] = center
+        }
+
+        // If both sheets are somehow in view, prefer a complete set, else the fullest.
+        let best = byVariant.max { a, b in
+            (a.value.count == 4 ? 10 : a.value.count) < (b.value.count == 4 ? 10 : b.value.count)
+        }
+        let found = best?.value ?? [:]
+        if let variant = best?.key, found.count == 4, variant != currentVariantVQ,
+           !isCalibratedOnVideoQueue {
+            setVariantOnVideoQueue(variant)
         }
 
         // Per-marker feedback while registering: highlight each recognized corner,
@@ -709,6 +730,27 @@ class CameraSessionManager: NSObject, ObservableObject {
             markersFound([tl, tr, bl, br], now: now)
         } else {
             markersMissing(now: now)
+        }
+    }
+
+    /// Video-queue-side variant switch, mirrored to the published copies.
+    private func setVariantOnVideoQueue(_ variant: KeyboardVariant) {
+        currentVariantVQ = variant
+        liveCalibration.variant = variant
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.calibration.variant = variant
+            self.activeVariant = variant
+        }
+    }
+
+    /// Manual variant selection (manual calibration has no QR payloads to read).
+    func setKeyboardVariant(_ variant: KeyboardVariant) {
+        calibration.variant = variant
+        activeVariant = variant
+        videoQueue.async { [weak self] in
+            self?.currentVariantVQ = variant
+            self?.liveCalibration.variant = variant
         }
     }
 

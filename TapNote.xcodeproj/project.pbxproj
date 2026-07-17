@@ -29,7 +29,8 @@
 		B020 /* PianoAudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A020 /* PianoAudioEngine.swift */; };
 		B021 /* VirtualPianoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A021 /* VirtualPianoView.swift */; };
 		B022 /* GeneralUserGS.sf2 in Resources */ = {isa = PBXBuildFile; fileRef = A022 /* GeneralUserGS.sf2 */; };
-		B023 /* TapNote_Keyboard_QR.pdf in Resources */ = {isa = PBXBuildFile; fileRef = A023 /* TapNote_Keyboard_QR.pdf */; };
+		B023 /* TapNote_Keyboard_2oct_A3.pdf in Resources */ = {isa = PBXBuildFile; fileRef = A023 /* TapNote_Keyboard_2oct_A3.pdf */; };
+		B024 /* TapNote_Keyboard_3oct_2xA3.pdf in Resources */ = {isa = PBXBuildFile; fileRef = A024 /* TapNote_Keyboard_3oct_2xA3.pdf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -55,7 +56,8 @@
 		A020 /* PianoAudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PianoAudioEngine.swift; path = Features/PaperPiano/PianoAudioEngine.swift; sourceTree = "<group>"; };
 		A021 /* VirtualPianoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VirtualPianoView.swift; path = Features/PaperPiano/VirtualPianoView.swift; sourceTree = "<group>"; };
 		A022 /* GeneralUserGS.sf2 */ = {isa = PBXFileReference; lastKnownFileType = file; name = GeneralUserGS.sf2; path = Resources/GeneralUserGS.sf2; sourceTree = "<group>"; };
-		A023 /* TapNote_Keyboard_QR.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; name = TapNote_Keyboard_QR.pdf; path = Resources/TapNote_Keyboard_QR.pdf; sourceTree = "<group>"; };
+		A023 /* TapNote_Keyboard_2oct_A3.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; name = TapNote_Keyboard_2oct_A3.pdf; path = Resources/TapNote_Keyboard_2oct_A3.pdf; sourceTree = "<group>"; };
+		A024 /* TapNote_Keyboard_3oct_2xA3.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; name = TapNote_Keyboard_3oct_2xA3.pdf; path = Resources/TapNote_Keyboard_3oct_2xA3.pdf; sourceTree = "<group>"; };
 		A099 /* TapNote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TapNote.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -135,7 +137,8 @@
 				GRP_FEATURES /* Features */,
 				A014 /* Assets.xcassets */,
 				A022 /* GeneralUserGS.sf2 */,
-				A023 /* TapNote_Keyboard_QR.pdf */,
+				A023 /* TapNote_Keyboard_2oct_A3.pdf */,
+				A024 /* TapNote_Keyboard_3oct_2xA3.pdf */,
 				PRODUCTS /* Products */,
 			);
 			sourceTree = "<group>";
@@ -200,7 +203,8 @@
 			files = (
 				B014 /* Assets.xcassets in Resources */,
 				B022 /* GeneralUserGS.sf2 in Resources */,
-				B023 /* TapNote_Keyboard_QR.pdf in Resources */,
+				B023 /* TapNote_Keyboard_2oct_A3.pdf in Resources */,
+				B024 /* TapNote_Keyboard_3oct_2xA3.pdf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
