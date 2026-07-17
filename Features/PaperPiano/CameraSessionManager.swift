@@ -54,6 +54,7 @@ class CameraSessionManager: NSObject, ObservableObject {
     private var captureDevice: AVCaptureDevice?
     #if !targetEnvironment(macCatalyst)
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
+    private let noteHaptic = UIImpactFeedbackGenerator(style: .light)
     #endif
 
     // Vision requests
@@ -558,6 +559,9 @@ class CameraSessionManager: NSObject, ObservableObject {
             guard let self else { return }
             self.activeNotes.removeAll { $0.key.id == key.id }
             self.activeNotes.append(ActiveNote(key: key, startTime: Date(), velocity: velocity))
+            #if !targetEnvironment(macCatalyst)
+            self.noteHaptic.impactOccurred()
+            #endif
         }
     }
 

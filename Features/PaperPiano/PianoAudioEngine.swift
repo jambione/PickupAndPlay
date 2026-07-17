@@ -257,6 +257,18 @@ class PianoAudioEngine {
         }
     }
 
+    /// Quick C-E-G arpeggio confirming the keyboard locked on.
+    func playCalibrationCue() {
+        let cue: [(NotePitch, Int)] = [(.C, 4), (.E, 4), (.G, 4)]
+        for (i, (pitch, octave)) in cue.enumerated() {
+            guard let key = PaperPianoKey.layout.first(where: { $0.note == pitch && $0.octave == octave })
+            else { continue }
+            audioQueue.asyncAfter(deadline: .now() + Double(i) * 0.12) { [weak self] in
+                self?.playNote(key: key, velocity: 0.7)
+            }
+        }
+    }
+
     func stopNote(key: PaperPianoKey) {
         audioQueue.async { [weak self] in
             guard let self else { return }

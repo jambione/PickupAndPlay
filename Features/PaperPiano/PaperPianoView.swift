@@ -1,5 +1,24 @@
 import SwiftUI
 import AVFoundation
+#if canImport(UIKit)
+import UIKit
+#endif
+
+// MARK: - Haptics
+
+/// Lightweight haptic helpers (no-ops on Mac Catalyst).
+enum Haptics {
+    static func success() {
+        #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        #endif
+    }
+    static func selection() {
+        #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        #endif
+    }
+}
 
 // MARK: - Paper Piano View (Main Screen)
 
@@ -211,37 +230,45 @@ private struct DetectedRectOverlay: View {
 
 // MARK: - Alignment Confirm View
 
+/// Transient "locked on" state: shows the detected outline and auto-starts play
+/// after a short beat of stable corners — no confirm tap needed.
 private struct AlignmentConfirmView: View {
     @ObservedObject var camera: CameraSessionManager
+    @State private var lockProgress: CGFloat = 0
+    private let lockDelay: TimeInterval = 0.75
+
     var body: some View {
         ZStack {
             CameraPreviewView(camera: camera, onTap: nil).ignoresSafeArea()
             GeometryReader { geo in DetectedRectOverlay(corners: camera.detectedCorners, geo: geo) }
             VStack {
                 Spacer()
-                VStack(spacing: 16) {
+                VStack(spacing: 12) {
                     HStack(spacing: 8) {
                         Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.system(size: 20))
-                        Text("Keyboard detected!")
+                        Text("Keyboard locked — starting…")
                             .font(.system(size: 16, weight: .bold, design: .rounded)).foregroundColor(.white)
                     }
-                    Text("Does the green outline match your printed keyboard?")
-                        .font(.system(size: 13)).foregroundColor(.white.opacity(0.8)).multilineTextAlignment(.center)
-                    HStack(spacing: 12) {
-                        Button("Retry") { camera.resetCalibration() }
-                            .font(.system(size: 14, weight: .semibold)).foregroundColor(.orange)
-                            .padding(.horizontal, 24).padding(.vertical, 10)
-                            .background(Color.white.opacity(0.1), in: Capsule())
-                        Button("Looks Good — Start Playing!") { camera.confirmAutoCalibration() }
-                            .font(.system(size: 14, weight: .bold)).foregroundColor(.white)
-                            .padding(.horizontal, 24).padding(.vertical, 10)
-                            .background(Color.indigo, in: Capsule())
-                    }
+                    SwiftUI.ProgressView(value: lockProgress)
+                        .tint(.green)
+                        .frame(width: 180)
+                    Button("Re-scan") { camera.resetCalibration() }
+                        .font(.system(size: 13, weight: .semibold)).foregroundColor(.orange)
                 }
-                .padding(24)
+                .padding(20)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
                 .padding(.horizontal, 20).padding(.bottom, 30)
             }
+        }
+        .task {
+            withAnimation(.linear(duration: lockDelay)) { lockProgress = 1 }
+            try? await Task.sleep(nanoseconds: UInt64(lockDelay * 1_000_000_000))
+            // Corners lost during the wait drop the state back to .scanning,
+            // which cancels this task via view removal — the guard is belt & braces.
+            guard camera.calibrationState == .aligned else { return }
+            camera.confirmAutoCalibration()
+            Haptics.success()
+            PianoAudioEngine.shared.playCalibrationCue()
         }
     }
 }
@@ -258,8 +285,13 @@ private struct PlayView: View {
         VStack(spacing: 0) {
             ZStack {
                 CameraPreviewView(camera: camera) { pt, size in camera.handleTap(at: pt, previewSize: size) }
+                KeyboardProjectionOverlay(calibration: camera.calibration,
+                                          activeKeyIDs: Set(camera.activeNotes.map { $0.key.id }))
+                    .allowsHitTesting(false)
                 FingertipOverlay(model: camera.overlayModel)
                     .allowsHitTesting(false)
+                NoteFlashOverlay(activeNotes: camera.activeNotes)
+                ZoomBadge(zoom: camera.zoomFactor)
                 VStack {
                     HStack {
                         ActiveNoteBar(activeNotes: camera.activeNotes)
@@ -275,6 +307,8 @@ private struct PlayView: View {
                 }
             }
             .frame(maxHeight: .infinity)
+
+            InstrumentPickerBar()
 
             keyboardHandleBar
 
@@ -314,6 +348,152 @@ private struct PlayView: View {
     }
 }
 
+// MARK: - Keyboard Projection Overlay
+
+/// Projects the key layout onto the camera image through the inverse homography,
+/// so the printed keyboard shows its boundaries and pressed keys glow in place.
+private struct KeyboardProjectionOverlay: View {
+    let calibration: KeyboardCalibration
+    let activeKeyIDs: Set<Int>
+
+    var body: some View {
+        Canvas { ctx, size in
+            guard calibration.isCalibrated else { return }
+
+            func quad(_ frame: CGRect) -> Path? {
+                let corners = [
+                    CGPoint(x: frame.minX, y: frame.minY),
+                    CGPoint(x: frame.maxX, y: frame.minY),
+                    CGPoint(x: frame.maxX, y: frame.maxY),
+                    CGPoint(x: frame.minX, y: frame.maxY),
+                ].compactMap { calibration.previewPoint(fromKeyboard: $0) }
+                guard corners.count == 4 else { return nil }
+                var path = Path()
+                path.move(to: CGPoint(x: corners[0].x * size.width, y: corners[0].y * size.height))
+                for pt in corners.dropFirst() {
+                    path.addLine(to: CGPoint(x: pt.x * size.width, y: pt.y * size.height))
+                }
+                path.closeSubpath()
+                return path
+            }
+
+            for key in PaperPianoKey.layout {
+                guard let path = quad(key.normalizedFrame) else { continue }
+                if activeKeyIDs.contains(key.id) {
+                    ctx.fill(path, with: .color(.indigo.opacity(0.4)))
+                }
+                let stroke: Color = key.isBlack ? .white.opacity(0.35) : .white.opacity(0.2)
+                ctx.stroke(path, with: .color(stroke), lineWidth: key.isBlack ? 1.2 : 1.0)
+            }
+        }
+    }
+}
+
+// MARK: - Note Flash Overlay
+
+/// Flashes the newest note's name large near the top of the camera view.
+private struct NoteFlashOverlay: View {
+    let activeNotes: [ActiveNote]
+
+    var body: some View {
+        VStack {
+            if let latest = activeNotes.last {
+                Text(latest.key.displayName)
+                    .font(.system(size: 44, weight: .heavy, design: .rounded))
+                    .foregroundColor(.white)
+                    .shadow(color: .indigo, radius: 12)
+                    .transition(.asymmetric(
+                        insertion: .scale(scale: 1.3).combined(with: .opacity),
+                        removal: .opacity))
+                    .id(latest.id)
+            }
+            Spacer()
+        }
+        .padding(.top, 46)
+        .animation(.spring(response: 0.25), value: activeNotes.last?.id)
+        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Zoom Badge
+
+/// Shows the current zoom while pinching, fading out shortly after.
+private struct ZoomBadge: View {
+    let zoom: CGFloat
+    @State private var visible = false
+    @State private var hideTask: Task<Void, Never>?
+
+    var body: some View {
+        VStack {
+            HStack {
+                Spacer()
+                if visible {
+                    Text(String(format: "%.1f×", zoom))
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(.black.opacity(0.55), in: Capsule())
+                        .transition(.opacity)
+                }
+            }
+            Spacer()
+        }
+        .padding(.top, 12).padding(.trailing, 14)
+        .allowsHitTesting(false)
+        .onChange(of: zoom) {
+            withAnimation(.easeIn(duration: 0.1)) { visible = true }
+            hideTask?.cancel()
+            hideTask = Task {
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.4)) { visible = false }
+            }
+        }
+    }
+}
+
+// MARK: - Instrument Picker
+
+/// Horizontal instrument chips. Selection persists across launches and is
+/// applied to the audio engine on appear and on change.
+private struct InstrumentPickerBar: View {
+    @AppStorage("tapnote.instrument") private var instrumentRaw = InstrumentPreset.grandPiano.rawValue
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(InstrumentPreset.allCases) { preset in
+                    let selected = preset.rawValue == instrumentRaw
+                    Button {
+                        guard !selected else { return }
+                        instrumentRaw = preset.rawValue
+                        Haptics.selection()
+                        PianoAudioEngine.shared.loadInstrument(preset)
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: preset.sfSymbol)
+                                .font(.system(size: 11, weight: .semibold))
+                            Text(preset.displayName)
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        }
+                        .foregroundColor(selected ? .white : .white.opacity(0.65))
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(selected ? Color.indigo : Color.white.opacity(0.08), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+        }
+        .background(Color(white: 0.1))
+        .onAppear {
+            if let preset = InstrumentPreset(rawValue: instrumentRaw) {
+                PianoAudioEngine.shared.loadInstrument(preset)
+            }
+        }
+    }
+}
+
 // MARK: - Print Instructions View
 
 struct PrintInstructionsView: View {
@@ -327,25 +507,31 @@ struct PrintInstructionsView: View {
                     Text("Print Your Paper Piano")
                         .font(.system(size: 24, weight: .bold, design: .rounded))
                     VStack(alignment: .leading, spacing: 16) {
-                        PrintStep(number: "1", title: "Download the PDF",
-                                  description: "Tap below to share the 3-octave piano keyboard PDF.")
-                        PrintStep(number: "2", title: "Print on A2 paper",
-                                  description: "Best results on A2. Or tile on 2 A3 sheets side by side.")
+                        PrintStep(number: "1", title: "Get the PDF",
+                                  description: "Tap below to share the 3-octave keyboard PDF — AirDrop it, save to Files, or print directly.")
+                        PrintStep(number: "2", title: "Print big & flat",
+                                  description: "A2 is ideal; tiling 2× A3 (or 4× A4) at 100% scale works too.")
                         PrintStep(number: "3", title: "Lay flat on a table",
                                   description: "Place in a well-lit area. Avoid glare from overhead lights.")
-                        PrintStep(number: "4", title: "Open the camera",
-                                  description: "Tap 'Start Camera', align the orange corners.")
+                        PrintStep(number: "4", title: "Point the camera",
+                                  description: "Keep all four QR squares in frame — the keyboard locks on automatically.")
                         PrintStep(number: "5", title: "Play!",
-                                  description: "Tap or hover your fingers — the app detects and plays each note.")
+                                  description: "Tap keys with your fingers — every finger plays its own note.")
                     }
                     .padding(.horizontal, 24)
-                    Button { } label: {
-                        Label("Download Piano PDF", systemImage: "arrow.down.circle.fill")
-                            .font(.system(size: 16, weight: .semibold)).foregroundColor(.white)
-                            .frame(maxWidth: .infinity).padding(.vertical, 14)
-                            .background(Color.indigo).cornerRadius(14)
+                    if let pdfURL = Bundle.main.url(forResource: "TapNote_Keyboard_QR", withExtension: "pdf") {
+                        ShareLink(item: pdfURL) {
+                            Label("Share Piano PDF", systemImage: "square.and.arrow.up.fill")
+                                .font(.system(size: 16, weight: .semibold)).foregroundColor(.white)
+                                .frame(maxWidth: .infinity).padding(.vertical, 14)
+                                .background(Color.indigo).cornerRadius(14)
+                        }
+                        .padding(.horizontal, 24).padding(.bottom, 30)
+                    } else {
+                        Label("PDF unavailable", systemImage: "exclamationmark.triangle")
+                            .font(.system(size: 14)).foregroundColor(.secondary)
+                            .padding(.bottom, 30)
                     }
-                    .padding(.horizontal, 24).padding(.bottom, 30)
                 }
             }
             .navigationTitle("Setup Guide")
@@ -389,7 +575,7 @@ struct CalibrationHelpView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     TipRow(icon: "sun.max.fill", text: "Use bright, even lighting. Avoid harsh shadows.")
                     TipRow(icon: "rectangle.landscape.rotate", text: "Hold your device in landscape mode for best alignment.")
-                    TipRow(icon: "arrow.up.and.down.and.arrow.left.and.right", text: "Keep the full keyboard in frame — all orange corners visible.")
+                    TipRow(icon: "arrow.up.and.down.and.arrow.left.and.right", text: "Keep the full keyboard in frame — all four QR squares visible. Pinch to zoom if needed.")
                     TipRow(icon: "hand.tap.fill", text: "If auto-detect fails, use Manual Calibration and tap each corner.")
                     TipRow(icon: "figure.wave", text: "Keep your hand above the keyboard so the camera can see your fingertips.")
                 }
