@@ -35,6 +35,11 @@ class CameraSessionManager: NSObject, ObservableObject {
     /// Frame-rate fingertip positions for the camera overlay (separate publisher).
     let overlayModel = FingerOverlayModel()
 
+    /// Per-corner registration feedback: marker name (TL/TR/BL/BR) → normalized
+    /// center, for every QR currently seen. Lets the UI highlight each recognized
+    /// corner individually and show which ones are still missing.
+    @Published var foundMarkers: [String: CGPoint] = [:]
+
     enum CalibrationState {
         case idle
         case scanning           // looking for corner markers
@@ -54,6 +59,7 @@ class CameraSessionManager: NSObject, ObservableObject {
     private var captureDevice: AVCaptureDevice?
     #if !targetEnvironment(macCatalyst)
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
+    private var rotationObservations: [NSKeyValueObservation] = []
     private let noteHaptic = UIImpactFeedbackGenerator(style: .light)
     #endif
 
@@ -261,13 +267,22 @@ class CameraSessionManager: NSObject, ObservableObject {
         DispatchQueue.main.async {
             self.previewLayer = layer
             #if !targetEnvironment(macCatalyst)
-            self.rotationCoordinator = AVCaptureDevice.RotationCoordinator(
+            // KVO on the coordinator's angles tracks the device's *physical*
+            // rotation continuously (gravity-based) — smoother than UIDevice
+            // orientation notifications, and it works under orientation lock.
+            let coordinator = AVCaptureDevice.RotationCoordinator(
                 device: device, previewLayer: layer)
-            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-            NotificationCenter.default.addObserver(
-                self, selector: #selector(self.orientationChanged),
-                name: UIDevice.orientationDidChangeNotification, object: nil)
-            self.applyRotation()
+            self.rotationCoordinator = coordinator
+            self.rotationObservations = [
+                coordinator.observe(\.videoRotationAngleForHorizonLevelPreview,
+                                    options: [.initial, .new]) { [weak self] _, _ in
+                    DispatchQueue.main.async { self?.applyRotation() }
+                },
+                coordinator.observe(\.videoRotationAngleForHorizonLevelCapture,
+                                    options: [.new]) { [weak self] _, _ in
+                    DispatchQueue.main.async { self?.applyRotation() }
+                },
+            ]
             #endif
         }
 
@@ -287,8 +302,6 @@ class CameraSessionManager: NSObject, ObservableObject {
     // MARK: - Orientation
 
     #if !targetEnvironment(macCatalyst)
-    @objc private func orientationChanged() { applyRotation() }
-
     /// Keeps the preview and the delivered frames upright for the current device
     /// orientation, so both portrait and landscape work and detection stays aligned.
     private func applyRotation() {
@@ -326,10 +339,13 @@ class CameraSessionManager: NSObject, ObservableObject {
         calibration = KeyboardCalibration()
         calibrationState = .idle
         detectedCorners = []
+        foundMarkers = [:]
         videoQueue.async { [weak self] in
             guard let self else { return }
             self.liveCalibration = KeyboardCalibration()
             self.isCalibratedOnVideoQueue = false
+            self.scanCorners = []
+            self.alignedSince = nil
             self.fingers.removeAll()
             self.handTracks.removeAll()
             for id in self.pressedKeyIDs {
@@ -343,6 +359,8 @@ class CameraSessionManager: NSObject, ObservableObject {
     func confirmAutoCalibration() {
         setCalibrationCorners(detectedCorners)
         calibrationState = .calibrated
+        foundMarkers = [:]
+        detectedCorners = []
     }
 
     // MARK: - Manual Tap (fallback input)
@@ -391,7 +409,10 @@ class CameraSessionManager: NSObject, ObservableObject {
         try? handler.perform(runQR ? [handPoseRequest, barcodeRequest] : [handPoseRequest])
 
         processHandPose()
-        if runQR { detectQRCorners(barcodeRequest.results ?? []) }
+        if runQR {
+            detectQRCorners(barcodeRequest.results ?? [],
+                            now: Date().timeIntervalSinceReferenceDate)
+        }
     }
 
     private func processHandPose() {
@@ -576,14 +597,24 @@ class CameraSessionManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Orange Corner-Marker Detection (calibration)
+    // MARK: - QR Corner-Marker Detection (calibration)
 
-    private var cornerStableCount = 0
+    // Video-queue-owned registration state.
+    private var scanCorners: [CGPoint] = []          // smoothed outline while registering
+    private var alignedSince: TimeInterval?          // when all 4 corners became stable
+    private var lastFullDetection: TimeInterval = 0  // last frame with all 4 markers
+
+    /// All 4 corners must hold steady this long before the state advances to
+    /// .aligned (the "short delay confirming recognition").
+    private let alignStability: TimeInterval = 0.5
+    /// Missed detections shorter than this don't bounce the UI back to scanning —
+    /// the single-frame flicker that made registration feel jittery.
+    private let markerGrace: TimeInterval = 0.4
 
     /// Locates the keyboard from the four corner QR codes. Each QR encodes its
     /// corner ("TAPNOTE:TL/TR/BL/BR"), so detection is unambiguous and robust to
     /// lighting and angle — Vision returns each code's position directly.
-    private func detectQRCorners(_ results: [VNBarcodeObservation]) {
+    private func detectQRCorners(_ results: [VNBarcodeObservation], now: TimeInterval) {
         var found: [String: CGPoint] = [:]
         for obs in results {
             guard let payload = obs.payloadStringValue,
@@ -593,14 +624,22 @@ class CameraSessionManager: NSObject, ObservableObject {
             let center = CGPoint(x: obs.boundingBox.midX, y: 1 - obs.boundingBox.midY)
             found[String(payload.dropFirst("TAPNOTE:".count))] = center
         }
-        guard let tl = found["TL"], let tr = found["TR"],
-              let bl = found["BL"], let br = found["BR"] else { markersLost(); return }
-        markersFound([tl, tr, bl, br])
+
+        // Per-marker feedback while registering: highlight each recognized corner.
+        if !isCalibratedOnVideoQueue {
+            DispatchQueue.main.async { [weak self] in self?.foundMarkers = found }
+        }
+
+        if let tl = found["TL"], let tr = found["TR"],
+           let bl = found["BL"], let br = found["BR"] {
+            markersFound([tl, tr, bl, br], now: now)
+        } else {
+            markersMissing(now: now)
+        }
     }
 
-    private func markersFound(_ corners: [CGPoint]) {
-        cornerStableCount += 1
-        let stable = cornerStableCount
+    private func markersFound(_ corners: [CGPoint], now: TimeInterval) {
+        lastFullDetection = now
 
         if isCalibratedOnVideoQueue {
             // Live re-calibration on the video queue: follow the paper as the
@@ -627,11 +666,25 @@ class CameraSessionManager: NSObject, ObservableObject {
             return
         }
 
+        // Registering: smooth the outline the same way so it doesn't jitter, and
+        // restart the stability clock on any big jump (camera swung elsewhere).
+        if scanCorners.count == 4,
+           zip(scanCorners, corners).allSatisfy({ hypot($0.x - $1.x, $0.y - $1.y) < 0.2 }) {
+            scanCorners = zip(scanCorners, corners).map {
+                CGPoint(x: 0.6 * $0.x + 0.4 * $1.x, y: 0.6 * $0.y + 0.4 * $1.y)
+            }
+        } else {
+            scanCorners = corners
+            alignedSince = now
+        }
+        if alignedSince == nil { alignedSince = now }
+
+        let stable = now - (alignedSince ?? now) >= alignStability
+        let outline = scanCorners
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.detectedCorners = corners
-            // Require a few consistent frames before offering to confirm.
-            if stable >= 3, self.calibrationState == .idle || self.calibrationState == .scanning {
+            self.detectedCorners = outline
+            if stable, self.calibrationState == .idle || self.calibrationState == .scanning {
                 self.calibrationState = .aligned
             } else if self.calibrationState == .idle {
                 self.calibrationState = .scanning
@@ -639,11 +692,15 @@ class CameraSessionManager: NSObject, ObservableObject {
         }
     }
 
-    private func markersLost() {
-        cornerStableCount = 0
+    private func markersMissing(now: TimeInterval) {
         // While calibrated, a missed detection just means the corners hold their
         // last smoothed position — nothing to publish.
         guard !isCalibratedOnVideoQueue else { return }
+        // Grace period: brief dropouts keep the current outline and state.
+        guard now - lastFullDetection > markerGrace else { return }
+        guard !scanCorners.isEmpty || alignedSince != nil else { return }
+        scanCorners = []
+        alignedSince = nil
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             if self.calibrationState == .aligned || self.calibrationState == .scanning {

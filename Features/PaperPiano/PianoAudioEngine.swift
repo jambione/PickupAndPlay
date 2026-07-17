@@ -103,6 +103,10 @@ class PianoAudioEngine {
     /// The active instrument (audioQueue-only; UI keeps its own selection state).
     private(set) var currentPreset: InstrumentPreset = .grandPiano
 
+    /// The preset whose bank/program is actually loaded in the sampler
+    /// (audioQueue-only) — lets loadInstrument skip redundant, risky reloads.
+    private var loadedPreset: InstrumentPreset?
+
     // MARK: - Init
 
     private init() {
@@ -170,31 +174,9 @@ class PianoAudioEngine {
     func loadInstrument(_ preset: InstrumentPreset) {
         audioQueue.async { [weak self] in
             guard let self else { return }
-            // Silence held notes so nothing hangs across the program change.
-            for note in self.soundingNotes { self.sampler.stopNote(note, onChannel: 0) }
-            self.soundingNotes.removeAll()
             self.currentPreset = preset
 
-            if let bank = self.soundbankURL() {
-                do {
-                    try self.sampler.loadSoundBankInstrument(
-                        at: bank,
-                        program: preset.gmProgram,
-                        bankMSB: UInt8(kAUSampler_DefaultMelodicBankMSB),
-                        bankLSB: UInt8(kAUSampler_DefaultBankLSB)
-                    )
-                    self.usingSampler = true
-                    print("✅ Sampler loaded: \(preset.displayName) from \(bank.lastPathComponent)")
-                } catch {
-                    print("Sampler failed for \(preset.displayName) (\(error)), falling back to synthesis")
-                    self.usingSampler = false
-                }
-            } else {
-                print("No soundbank available, using synthesis")
-                self.usingSampler = false
-            }
-
-            // Effects profile
+            // Effects profile applies even when the bank is already loaded.
             self.reverb.wetDryMix = preset.reverbMix
             if self.eq.bands.count >= 3 {
                 let g = preset.eqGains
@@ -202,6 +184,44 @@ class PianoAudioEngine {
                 self.eq.bands[1].gain = g.mid
                 self.eq.bands[2].gain = g.high
             }
+
+            // Same bank+program already in the sampler: nothing to (re)load.
+            // Reloading is not free of risk (see below), so never do it idly.
+            guard !(self.usingSampler && self.loadedPreset == preset) else { return }
+
+            // Silence held notes so nothing hangs across the program change.
+            for note in self.soundingNotes { self.sampler.stopNote(note, onChannel: 0) }
+            self.soundingNotes.removeAll()
+
+            guard let bank = self.soundbankURL() else {
+                print("No soundbank available, using synthesis")
+                self.usingSampler = false
+                self.loadedPreset = nil
+                return
+            }
+
+            // The render thread keeps reading the old bank's sample memory while
+            // voices ring out (release tails render even after note-off). Swapping
+            // the bank mid-render reads freed memory and crashes (SIGSEGV in
+            // SamplerNote::Render) — halt the engine around the swap.
+            let wasRunning = self.engine.isRunning
+            if wasRunning { self.engine.pause() }
+            do {
+                try self.sampler.loadSoundBankInstrument(
+                    at: bank,
+                    program: preset.gmProgram,
+                    bankMSB: UInt8(kAUSampler_DefaultMelodicBankMSB),
+                    bankLSB: UInt8(kAUSampler_DefaultBankLSB)
+                )
+                self.usingSampler = true
+                self.loadedPreset = preset
+                print("✅ Sampler loaded: \(preset.displayName) from \(bank.lastPathComponent)")
+            } catch {
+                print("Sampler failed for \(preset.displayName) (\(error)), falling back to synthesis")
+                self.usingSampler = false
+                self.loadedPreset = nil
+            }
+            if wasRunning { try? self.engine.start() }
         }
     }
 

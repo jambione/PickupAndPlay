@@ -26,20 +26,72 @@ struct PaperPianoView: View {
     @StateObject private var camera = CameraSessionManager()
     @State private var showingPrintSheet = false
     @State private var showCalibrationHelp = false
+    @State private var manualCalibrationMode = false
+    @State private var manualCorners: [CGPoint] = []
+    @State private var showKeyboard = true
     @Environment(\.dismiss) var dismiss
+    private let keyboardHeight: CGFloat = 160
+
+    private var isPlaying: Bool { camera.calibrationState == .calibrated }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            switch camera.calibrationState {
-            case .idle, .scanning:
-                ScanningView(camera: camera, showHelp: $showCalibrationHelp)
-            case .aligned:
-                AlignmentConfirmView(camera: camera)
-            case .calibrated:
-                PlayView(camera: camera, showPrint: $showingPrintSheet)
+        VStack(spacing: 0) {
+            ZStack {
+                // ONE camera preview persists across scanning → lock-on → play.
+                // The previous design swapped whole view hierarchies (preview
+                // included) per state, which made every transition flash/jump.
+                CameraPreviewView(camera: camera) { pt, size in
+                    if isPlaying {
+                        camera.handleTap(at: pt, previewSize: size)
+                    } else if manualCalibrationMode {
+                        handleManualTap(pt, size: size)
+                    }
+                }
+
+                if isPlaying {
+                    KeyboardProjectionOverlay(calibration: camera.calibration,
+                                              activeKeyIDs: Set(camera.activeNotes.map { $0.key.id }))
+                        .allowsHitTesting(false)
+                    FingertipOverlay(model: camera.overlayModel)
+                        .allowsHitTesting(false)
+                    NoteFlashOverlay(activeNotes: camera.activeNotes)
+                    playTopBar
+                } else {
+                    RegistrationOverlay(camera: camera,
+                                        manualMode: $manualCalibrationMode,
+                                        manualCorners: $manualCorners,
+                                        showHelp: $showCalibrationHelp)
+                }
+
+                ZoomBadge(zoom: camera.zoomFactor)
+            }
+            .frame(maxHeight: .infinity)
+            .background(Color.black)
+
+            if isPlaying {
+                InstrumentPickerBar()
+                keyboardHandleBar
+                if showKeyboard {
+                    ZStack {
+                        Color(white: 0.07)
+                        VirtualPianoView(activeNotes: camera.activeNotes) { key in
+                            camera.triggerKey(key, velocity: 0.85)
+                        }
+                        .padding(.horizontal, 4).padding(.vertical, 6)
+                        GeometryReader { geo in
+                            NoteRippleOverlay(activeNotes: camera.activeNotes,
+                                              containerSize: CGSize(width: geo.size.width, height: keyboardHeight))
+                        }
+                    }
+                    .frame(height: keyboardHeight)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
         }
+        .background(Color.black.ignoresSafeArea())
+        .animation(.spring(response: 0.45, dampingFraction: 0.85), value: camera.calibrationState)
+        .animation(.spring(response: 0.35), value: showKeyboard)
+        .ignoresSafeArea(.all, edges: .bottom)
         .navigationTitle("Paper Piano")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -60,82 +112,43 @@ struct PaperPianoView: View {
         .sheet(isPresented: $showCalibrationHelp) { CalibrationHelpView() }
         .onAppear { camera.start() }
         .onDisappear { camera.stop() }
-    }
-}
-
-// MARK: - Scanning View
-
-private struct ScanningView: View {
-    @ObservedObject var camera: CameraSessionManager
-    @Binding var showHelp: Bool
-    @State private var manualCalibrationMode = false
-    @State private var manualCorners: [CGPoint] = []
-
-    var body: some View {
-        ZStack {
-            GeometryReader { geo in
-                CameraPreviewView(camera: camera) { pt, size in
-                    if manualCalibrationMode { handleManualTap(pt, size: size) }
-                }
-                .ignoresSafeArea()
-                ScanGuideOverlay(geo: geo, isAligning: camera.calibrationState == .scanning)
-                if !camera.detectedCorners.isEmpty {
-                    DetectedRectOverlay(corners: camera.detectedCorners, geo: geo)
-                }
-                ForEach(manualCorners.indices, id: \.self) { i in
-                    Circle().fill(Color.orange).frame(width: 16, height: 16).position(manualCorners[i])
-                }
+        .onChange(of: camera.calibrationState) {
+            if camera.calibrationState == .calibrated {
+                manualCalibrationMode = false
+                manualCorners = []
             }
-            VStack {
+        }
+    }
+
+    private var playTopBar: some View {
+        VStack {
+            HStack {
+                ActiveNoteBar(activeNotes: camera.activeNotes)
                 Spacer()
-                VStack(spacing: 12) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "camera.viewfinder").foregroundColor(.orange)
-                        Text(statusText)
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            .foregroundColor(.white)
-                    }
-                    if manualCalibrationMode {
-                        Text("Tap the \(4 - manualCorners.count) remaining corners of the printed keyboard")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.white.opacity(0.7))
-                            .multilineTextAlignment(.center)
-                        if !manualCorners.isEmpty {
-                            Button("Reset corners") { manualCorners = []; camera.resetCalibration() }
-                                .font(.system(size: 13, weight: .medium)).foregroundColor(.orange)
-                        }
-                    } else {
-                        Button("Tap to calibrate manually") { manualCalibrationMode = true }
-                            .font(.system(size: 13, weight: .medium)).foregroundColor(.orange)
-                    }
-                    // Camera authorization state (black preview usually means no access)
-                    if camera.authStatus == .denied || camera.authStatus == .restricted {
-                        Button("Enable Camera Access") { camera.openSystemSettings() }
-                            .font(.system(size: 13, weight: .semibold)).foregroundColor(.orange)
-                    } else if camera.authStatus != .authorized {
-                        Text("Camera: \(camera.authStatus.rawValue)")
-                            .font(.system(size: 11)).foregroundColor(.white.opacity(0.5))
-                    }
-                    Button { showHelp = true } label: {
-                        Label("Setup Help", systemImage: "questionmark.circle")
-                            .font(.system(size: 13)).foregroundColor(.white.opacity(0.6))
-                    }
+                Button { camera.resetCalibration() } label: {
+                    Image(systemName: "viewfinder.circle")
+                        .font(.system(size: 22)).foregroundColor(.white.opacity(0.7))
                 }
-                .padding(20)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
-                .padding(.horizontal, 20).padding(.bottom, 30)
+                .padding(.trailing, 16)
             }
+            .padding(.top, 12).padding(.leading, 16)
+            Spacer()
         }
-        .onChange(of: camera.calibrationState) { }
     }
 
-    private var statusText: String {
-        if manualCalibrationMode { return "Manual: tap each corner" }
-        switch camera.calibrationState {
-        case .idle: return "Looking for printed keyboard…"
-        case .scanning: return "Scanning… hold steady"
-        default: return "Keyboard detected!"
+    private var keyboardHandleBar: some View {
+        Button { showKeyboard.toggle() } label: {
+            HStack(spacing: 6) {
+                Image(systemName: showKeyboard ? "chevron.down" : "chevron.up")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(showKeyboard ? "Hide Keyboard" : "Show Keyboard")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+            }
+            .foregroundColor(.white.opacity(0.6))
+            .frame(maxWidth: .infinity).frame(height: 28)
+            .background(Color(white: 0.12))
         }
+        .buttonStyle(.plain)
     }
 
     private func handleManualTap(_ pt: CGPoint, size: CGSize) {
@@ -146,6 +159,179 @@ private struct ScanningView: View {
                 CGPoint(x: $0.x / size.width, y: $0.y / size.height)
             })
             camera.calibrationState = .calibrated
+        }
+    }
+}
+
+// MARK: - Registration Overlay
+
+/// Everything shown while registering the keyboard: a highlight ring on each
+/// recognized QR corner, a 4-corner checklist, the smoothed detected outline,
+/// manual calibration, and the lock-on progress once all corners hold steady.
+private struct RegistrationOverlay: View {
+    @ObservedObject var camera: CameraSessionManager
+    @Binding var manualMode: Bool
+    @Binding var manualCorners: [CGPoint]
+    @Binding var showHelp: Bool
+
+    private static let markerOrder = ["TL", "TR", "BL", "BR"]
+    private static let markerArrows = ["TL": "↖", "TR": "↗", "BL": "↙", "BR": "↘"]
+
+    var body: some View {
+        ZStack {
+            GeometryReader { geo in
+                if !manualMode && camera.foundMarkers.isEmpty && camera.detectedCorners.isEmpty {
+                    ScanGuideOverlay(geo: geo, isAligning: false)
+                }
+                if !camera.detectedCorners.isEmpty {
+                    DetectedRectOverlay(corners: camera.detectedCorners, geo: geo)
+                }
+                if !manualMode {
+                    MarkerDotsOverlay(markers: camera.foundMarkers, geo: geo)
+                }
+                ForEach(manualCorners.indices, id: \.self) { i in
+                    Circle().fill(Color.orange).frame(width: 16, height: 16)
+                        .position(manualCorners[i])
+                }
+            }
+            .allowsHitTesting(false)
+
+            VStack {
+                Spacer()
+                statusCard
+            }
+        }
+    }
+
+    private var statusCard: some View {
+        VStack(spacing: 12) {
+            if camera.calibrationState == .aligned && !manualMode {
+                LockProgressContent(camera: camera)
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: manualMode ? "hand.tap.fill" : "qrcode.viewfinder")
+                        .foregroundColor(.orange)
+                    Text(statusText)
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundColor(.white)
+                }
+                if manualMode {
+                    Text("Tap the \(4 - manualCorners.count) remaining corners of the printed keyboard")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                    if !manualCorners.isEmpty {
+                        Button("Reset corners") { manualCorners = []; camera.resetCalibration() }
+                            .font(.system(size: 13, weight: .medium)).foregroundColor(.orange)
+                    }
+                    Button("Back to auto-detect") { manualMode = false; manualCorners = [] }
+                        .font(.system(size: 13, weight: .medium)).foregroundColor(.white.opacity(0.6))
+                } else {
+                    cornerChecklist
+                    Button("Tap to calibrate manually") { manualMode = true }
+                        .font(.system(size: 13, weight: .medium)).foregroundColor(.orange)
+                }
+                // Camera authorization state (black preview usually means no access)
+                if camera.authStatus == .denied || camera.authStatus == .restricted {
+                    Button("Enable Camera Access") { camera.openSystemSettings() }
+                        .font(.system(size: 13, weight: .semibold)).foregroundColor(.orange)
+                } else if camera.authStatus != .authorized {
+                    Text("Camera: \(camera.authStatus.rawValue)")
+                        .font(.system(size: 11)).foregroundColor(.white.opacity(0.5))
+                }
+                Button { showHelp = true } label: {
+                    Label("Setup Help", systemImage: "questionmark.circle")
+                        .font(.system(size: 13)).foregroundColor(.white.opacity(0.6))
+                }
+            }
+        }
+        .padding(20)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .padding(.horizontal, 20).padding(.bottom, 30)
+        .animation(.easeInOut(duration: 0.2), value: camera.foundMarkers.keys.sorted())
+    }
+
+    /// One chip per corner QR, lighting up green as each is recognized.
+    private var cornerChecklist: some View {
+        HStack(spacing: 12) {
+            ForEach(Self.markerOrder, id: \.self) { name in
+                let found = camera.foundMarkers[name] != nil
+                HStack(spacing: 4) {
+                    Image(systemName: found ? "checkmark.circle.fill" : "circle.dotted")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(Self.markerArrows[name] ?? name)
+                        .font(.system(size: 13, weight: .bold))
+                }
+                .foregroundColor(found ? .green : .white.opacity(0.4))
+            }
+        }
+    }
+
+    private var statusText: String {
+        if manualMode { return "Manual: tap each corner" }
+        let count = camera.foundMarkers.count
+        switch count {
+        case 0:  return "Point at the printed keyboard"
+        case 4:  return "All corners found — hold steady…"
+        default: return "Found \(count) of 4 QR corners"
+        }
+    }
+}
+
+// MARK: - Marker Dots Overlay
+
+/// A green ring over every QR corner the camera currently recognizes — direct
+/// confirmation of what's seen and what's still missing.
+private struct MarkerDotsOverlay: View {
+    let markers: [String: CGPoint]
+    let geo: GeometryProxy
+
+    var body: some View {
+        ZStack {
+            ForEach(markers.keys.sorted(), id: \.self) { name in
+                if let pt = markers[name] {
+                    Circle()
+                        .stroke(Color.green, lineWidth: 3)
+                        .background(Circle().fill(Color.green.opacity(0.2)))
+                        .frame(width: 36, height: 36)
+                        .position(x: pt.x * geo.size.width, y: pt.y * geo.size.height)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Lock Progress
+
+/// Shown once all four corners are stable: a short countdown, then play starts
+/// automatically (with a success haptic + arpeggio cue).
+private struct LockProgressContent: View {
+    @ObservedObject var camera: CameraSessionManager
+    @State private var lockProgress: CGFloat = 0
+    private let lockDelay: TimeInterval = 0.75
+
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.system(size: 20))
+                Text("Keyboard locked — starting…")
+                    .font(.system(size: 16, weight: .bold, design: .rounded)).foregroundColor(.white)
+            }
+            SwiftUI.ProgressView(value: lockProgress)
+                .tint(.green)
+                .frame(width: 180)
+            Button("Re-scan") { camera.resetCalibration() }
+                .font(.system(size: 13, weight: .semibold)).foregroundColor(.orange)
+        }
+        .task {
+            withAnimation(.linear(duration: lockDelay)) { lockProgress = 1 }
+            try? await Task.sleep(nanoseconds: UInt64(lockDelay * 1_000_000_000))
+            // Corners lost during the wait drop the state back to .scanning,
+            // which removes this view and cancels the task — the guard is belt & braces.
+            guard camera.calibrationState == .aligned else { return }
+            camera.confirmAutoCalibration()
+            Haptics.success()
+            PianoAudioEngine.shared.playCalibrationCue()
         }
     }
 }
@@ -225,126 +411,6 @@ private struct DetectedRectOverlay: View {
             ctx.stroke(path, with: .color(.green.opacity(0.8)), style: StrokeStyle(lineWidth: 2))
             ctx.fill(path, with: .color(.green.opacity(0.1)))
         }
-    }
-}
-
-// MARK: - Alignment Confirm View
-
-/// Transient "locked on" state: shows the detected outline and auto-starts play
-/// after a short beat of stable corners — no confirm tap needed.
-private struct AlignmentConfirmView: View {
-    @ObservedObject var camera: CameraSessionManager
-    @State private var lockProgress: CGFloat = 0
-    private let lockDelay: TimeInterval = 0.75
-
-    var body: some View {
-        ZStack {
-            CameraPreviewView(camera: camera, onTap: nil).ignoresSafeArea()
-            GeometryReader { geo in DetectedRectOverlay(corners: camera.detectedCorners, geo: geo) }
-            VStack {
-                Spacer()
-                VStack(spacing: 12) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.system(size: 20))
-                        Text("Keyboard locked — starting…")
-                            .font(.system(size: 16, weight: .bold, design: .rounded)).foregroundColor(.white)
-                    }
-                    SwiftUI.ProgressView(value: lockProgress)
-                        .tint(.green)
-                        .frame(width: 180)
-                    Button("Re-scan") { camera.resetCalibration() }
-                        .font(.system(size: 13, weight: .semibold)).foregroundColor(.orange)
-                }
-                .padding(20)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
-                .padding(.horizontal, 20).padding(.bottom, 30)
-            }
-        }
-        .task {
-            withAnimation(.linear(duration: lockDelay)) { lockProgress = 1 }
-            try? await Task.sleep(nanoseconds: UInt64(lockDelay * 1_000_000_000))
-            // Corners lost during the wait drop the state back to .scanning,
-            // which cancels this task via view removal — the guard is belt & braces.
-            guard camera.calibrationState == .aligned else { return }
-            camera.confirmAutoCalibration()
-            Haptics.success()
-            PianoAudioEngine.shared.playCalibrationCue()
-        }
-    }
-}
-
-// MARK: - Play View
-
-private struct PlayView: View {
-    @ObservedObject var camera: CameraSessionManager
-    @Binding var showPrint: Bool
-    @State private var showKeyboard = true
-    private let keyboardHeight: CGFloat = 160
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                CameraPreviewView(camera: camera) { pt, size in camera.handleTap(at: pt, previewSize: size) }
-                KeyboardProjectionOverlay(calibration: camera.calibration,
-                                          activeKeyIDs: Set(camera.activeNotes.map { $0.key.id }))
-                    .allowsHitTesting(false)
-                FingertipOverlay(model: camera.overlayModel)
-                    .allowsHitTesting(false)
-                NoteFlashOverlay(activeNotes: camera.activeNotes)
-                ZoomBadge(zoom: camera.zoomFactor)
-                VStack {
-                    HStack {
-                        ActiveNoteBar(activeNotes: camera.activeNotes)
-                        Spacer()
-                        Button { camera.resetCalibration() } label: {
-                            Image(systemName: "viewfinder.circle")
-                                .font(.system(size: 22)).foregroundColor(.white.opacity(0.7))
-                        }
-                        .padding(.trailing, 16)
-                    }
-                    .padding(.top, 12).padding(.leading, 16)
-                    Spacer()
-                }
-            }
-            .frame(maxHeight: .infinity)
-
-            InstrumentPickerBar()
-
-            keyboardHandleBar
-
-            if showKeyboard {
-                ZStack {
-                    Color(white: 0.07)
-                    VirtualPianoView(activeNotes: camera.activeNotes) { key in
-                        camera.triggerKey(key, velocity: 0.85)
-                    }
-                    .padding(.horizontal, 4).padding(.vertical, 6)
-                    GeometryReader { geo in
-                        NoteRippleOverlay(activeNotes: camera.activeNotes,
-                                          containerSize: CGSize(width: geo.size.width, height: keyboardHeight))
-                    }
-                }
-                .frame(height: keyboardHeight)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
-        .animation(.spring(response: 0.35), value: showKeyboard)
-        .ignoresSafeArea(.all, edges: .bottom)
-    }
-
-    private var keyboardHandleBar: some View {
-        Button { showKeyboard.toggle() } label: {
-            HStack(spacing: 6) {
-                Image(systemName: showKeyboard ? "chevron.down" : "chevron.up")
-                    .font(.system(size: 11, weight: .semibold))
-                Text(showKeyboard ? "Hide Keyboard" : "Show Keyboard")
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-            }
-            .foregroundColor(.white.opacity(0.6))
-            .frame(maxWidth: .infinity).frame(height: 28)
-            .background(Color(white: 0.12))
-        }
-        .buttonStyle(.plain)
     }
 }
 
