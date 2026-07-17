@@ -63,7 +63,8 @@ struct PaperPianoView: View {
                                         showHelp: $showCalibrationHelp)
                 }
 
-                ZoomBadge(zoom: camera.zoomFactor)
+                ZoomBadge(zoom: camera.zoomFactor,
+                          auto: camera.autoFrameHint == .zoomingIn || camera.autoFrameHint == .zoomingOut)
             }
             .frame(maxHeight: .infinity)
             .background(Color.black)
@@ -188,6 +189,19 @@ private struct RegistrationOverlay: View {
                 }
                 if !manualMode {
                     MarkerDotsOverlay(markers: camera.foundMarkers, geo: geo)
+                    // Ghost target: where the missing corner must be (computed
+                    // from the three found ones) — "looking for this one".
+                    if case .aimToward(let corners, .some(let est)) = camera.autoFrameHint {
+                        ZStack {
+                            Circle()
+                                .stroke(Color.orange, style: StrokeStyle(lineWidth: 2.5, dash: [5, 4]))
+                                .frame(width: 40, height: 40)
+                            Text(corners.first.flatMap { Self.markerArrows[$0] } ?? "?")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundColor(.orange)
+                        }
+                        .position(x: est.x * geo.size.width, y: est.y * geo.size.height)
+                    }
                 }
                 ForEach(manualCorners.indices, id: \.self) { i in
                     Circle().fill(Color.orange).frame(width: 16, height: 16)
@@ -227,12 +241,34 @@ private struct RegistrationOverlay: View {
                         Button("Reset corners") { manualCorners = []; camera.resetCalibration() }
                             .font(.system(size: 13, weight: .medium)).foregroundColor(.orange)
                     }
-                    Button("Back to auto-detect") { manualMode = false; manualCorners = [] }
-                        .font(.system(size: 13, weight: .medium)).foregroundColor(.white.opacity(0.6))
+                    Button("Back to auto-detect") {
+                        manualMode = false; manualCorners = []
+                        camera.resumeAutoFrame()
+                    }
+                    .font(.system(size: 13, weight: .medium)).foregroundColor(.white.opacity(0.6))
                 } else {
                     cornerChecklist
-                    Button("Tap to calibrate manually") { manualMode = true }
-                        .font(.system(size: 13, weight: .medium)).foregroundColor(.orange)
+                    if let hint = camera.autoFrameHint {
+                        HStack(spacing: 6) {
+                            Image(systemName: hintIcon(hint))
+                            Text(hintText(hint))
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.orange.opacity(0.95))
+                    }
+                    if camera.autoFramePaused {
+                        Button {
+                            camera.resumeAutoFrame()
+                        } label: {
+                            Label("Auto-framing paused — tap to resume", systemImage: "camera.metering.center.weighted")
+                                .font(.system(size: 12, weight: .medium)).foregroundColor(.orange)
+                        }
+                    }
+                    Button("Tap to calibrate manually") {
+                        manualMode = true
+                        camera.pauseAutoFrame()
+                    }
+                    .font(.system(size: 13, weight: .medium)).foregroundColor(.orange)
                 }
                 // Camera authorization state (black preview usually means no access)
                 if camera.authStatus == .denied || camera.authStatus == .restricted {
@@ -290,6 +326,31 @@ private struct RegistrationOverlay: View {
             "Tap the ↘ bottom-right QR (front edge, by C6)",
         ]
         return manualCorners.count < 4 ? steps[manualCorners.count] : "All corners set"
+    }
+
+    private func hintIcon(_ hint: AutoFrameHint) -> String {
+        switch hint {
+        case .zoomingOut:  return "minus.magnifyingglass"
+        case .zoomingIn:   return "plus.magnifyingglass"
+        case .aimToward:   return "scope"
+        case .searchWider: return "arrow.backward.circle"
+        }
+    }
+
+    private func hintText(_ hint: AutoFrameHint) -> String {
+        switch hint {
+        case .zoomingOut:
+            return "Zooming out to find more corners…"
+        case .zoomingIn:
+            return "Zooming in for a tighter view…"
+        case .aimToward(let corners, let estimate):
+            let arrows = corners.compactMap { Self.markerArrows[$0] }.joined(separator: " ")
+            return estimate != nil
+                ? "One corner hidden — uncover the \(arrows) QR"
+                : "Aim toward \(arrows) to catch the missing corner\(corners.count > 1 ? "s" : "")"
+        case .searchWider:
+            return "Move the phone back or aim at the keyboard"
+        }
     }
 }
 
@@ -502,9 +563,11 @@ private struct NoteFlashOverlay: View {
 
 // MARK: - Zoom Badge
 
-/// Shows the current zoom while pinching, fading out shortly after.
+/// Shows the current zoom while it changes (pinch or auto-frame), fading out
+/// shortly after; tagged AUTO while auto-frame is driving.
 private struct ZoomBadge: View {
     let zoom: CGFloat
+    var auto: Bool = false
     @State private var visible = false
     @State private var hideTask: Task<Void, Never>?
 
@@ -513,12 +576,20 @@ private struct ZoomBadge: View {
             HStack {
                 Spacer()
                 if visible {
-                    Text(String(format: "%.1f×", zoom))
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(.black.opacity(0.55), in: Capsule())
-                        .transition(.opacity)
+                    HStack(spacing: 5) {
+                        Text(String(format: "%.1f×", zoom))
+                        if auto {
+                            Text("AUTO")
+                                .font(.system(size: 9, weight: .heavy, design: .rounded))
+                                .padding(.horizontal, 4).padding(.vertical, 1)
+                                .background(Color.orange, in: Capsule())
+                        }
+                    }
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(.black.opacity(0.55), in: Capsule())
+                    .transition(.opacity)
                 }
             }
             Spacer()

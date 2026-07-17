@@ -8,6 +8,16 @@ import SwiftUI
 import UIKit
 #endif
 
+// MARK: - Auto-Frame Hint
+
+/// What auto-frame is doing / needs from the user during registration.
+enum AutoFrameHint: Equatable {
+    case zoomingOut                                  // widening to find more corners
+    case zoomingIn                                   // tightening on the found keyboard
+    case aimToward(corners: [String], estimate: CGPoint?)  // camera must be aimed; estimate = predicted spot (normalized) if known
+    case searchWider                                 // already at widest — reposition the phone
+}
+
 // MARK: - Finger Overlay Model
 
 /// Isolated frame-rate publisher: only the fingertip overlay observes this, so
@@ -39,6 +49,12 @@ class CameraSessionManager: NSObject, ObservableObject {
     /// center, for every QR currently seen. Lets the UI highlight each recognized
     /// corner individually and show which ones are still missing.
     @Published var foundMarkers: [String: CGPoint] = [:]
+
+    /// What auto-frame is currently doing (nil = idle/satisfied).
+    @Published var autoFrameHint: AutoFrameHint?
+
+    /// True after a manual pinch pauses auto-framing (resumable).
+    @Published var autoFramePaused = false
 
     enum CalibrationState {
         case idle
@@ -178,18 +194,48 @@ class CameraSessionManager: NSObject, ObservableObject {
 
     // MARK: - Zoom
 
-    /// Sets the camera zoom (1× = no zoom), clamped to the device's supported range.
-    func setZoom(_ factor: CGFloat) {
+    /// The device zoom factor that shows the familiar 1× wide field of view.
+    /// On a dual-wide virtual camera the ultra-wide lens sits *below* this
+    /// (device factor 1.0 ≈ "0.5×"), giving auto-frame extra reach outward.
+    private var defaultZoom: CGFloat = 1.0
+
+    private var maxDeviceZoom: CGFloat {
+        guard let device = captureDevice else { return 6 }
+        return min(defaultZoom * 6.0, device.maxAvailableVideoZoomFactor)
+    }
+
+    /// Sets zoom in *display* units (1× = the familiar wide view; below 1× uses
+    /// the ultra-wide lens where available). Used by pinch.
+    func setZoom(_ displayFactor: CGFloat) {
+        setDeviceZoom(displayFactor * defaultZoom)
+    }
+
+    private func setDeviceZoom(_ factor: CGFloat) {
         guard let device = captureDevice else { return }
-        let maxZoom = min(6.0, device.maxAvailableVideoZoomFactor)
-        let clamped = max(1.0, min(factor, maxZoom))
+        let clamped = max(device.minAvailableVideoZoomFactor, min(factor, maxDeviceZoom))
         do {
             try device.lockForConfiguration()
             device.videoZoomFactor = clamped
             device.unlockForConfiguration()
-            DispatchQueue.main.async { self.zoomFactor = clamped }
+            let display = clamped / defaultZoom
+            DispatchQueue.main.async { self.zoomFactor = display }
         } catch {
             print("zoom error: \(error)")
+        }
+    }
+
+    /// Smoothly ramps to a device zoom factor (auto-frame's movements).
+    private func rampDeviceZoom(to factor: CGFloat, rate: Float = 1.5) {
+        guard let device = captureDevice else { return }
+        let clamped = max(device.minAvailableVideoZoomFactor, min(factor, maxDeviceZoom))
+        do {
+            try device.lockForConfiguration()
+            device.ramp(toVideoZoomFactor: clamped, withRate: rate)
+            device.unlockForConfiguration()
+            let display = clamped / defaultZoom
+            DispatchQueue.main.async { self.zoomFactor = display }
+        } catch {
+            print("zoom ramp error: \(error)")
         }
     }
 
@@ -226,8 +272,11 @@ class CameraSessionManager: NSObject, ObservableObject {
     private func setupSession() {
         session.beginConfiguration()
 
-        // Input — prefer back camera on iOS, built-in on Mac
+        // Input — prefer the dual-wide virtual camera (wide + ultra-wide) so
+        // auto-frame can zoom out beyond 1× to find the QR corners by itself;
+        // fall back to the plain wide camera (Catalyst, older devices).
         let deviceTypes: [AVCaptureDevice.DeviceType] = [
+            .builtInDualWideCamera,
             .builtInWideAngleCamera
         ]
         let discovery = AVCaptureDevice.DiscoverySession(
@@ -241,6 +290,10 @@ class CameraSessionManager: NSObject, ObservableObject {
             return
         }
         captureDevice = device
+        // On a virtual device the wide lens starts at the first switch-over
+        // factor; device factor 1.0 is the ultra-wide's widest view.
+        defaultZoom = device.virtualDeviceSwitchOverVideoZoomFactors.first
+            .map { CGFloat(truncating: $0) } ?? 1.0
         if session.canAddInput(input) { session.addInput(input) }
 
         // High frame rate: pick a 60 fps-capable format where available
@@ -300,8 +353,11 @@ class CameraSessionManager: NSObject, ObservableObject {
         barcodeRequest.symbologies = [.qr]
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.session.startRunning()
-            DispatchQueue.main.async { self?.isRunning = true }
+            guard let self else { return }
+            self.session.startRunning()
+            // Start at the familiar 1× wide view (not the ultra-wide extreme).
+            self.setDeviceZoom(self.defaultZoom)
+            DispatchQueue.main.async { self.isRunning = true }
         }
     }
 
@@ -346,8 +402,13 @@ class CameraSessionManager: NSObject, ObservableObject {
         calibrationState = .idle
         detectedCorners = []
         foundMarkers = [:]
+        autoFramePaused = false
+        autoFrameHint = nil
+        setDeviceZoom(defaultZoom)   // fresh scan starts from the familiar 1× view
         videoQueue.async { [weak self] in
             guard let self else { return }
+            self.autoFrameActive = true
+            self.lastHint = nil
             self.liveCalibration = KeyboardCalibration()
             self.isCalibratedOnVideoQueue = false
             self.scanCorners = []
@@ -367,6 +428,8 @@ class CameraSessionManager: NSObject, ObservableObject {
         calibrationState = .calibrated
         foundMarkers = [:]
         detectedCorners = []
+        autoFrameHint = nil
+        videoQueue.async { [weak self] in self?.lastHint = nil }
     }
 
     // MARK: - Manual Tap (fallback input)
@@ -634,9 +697,11 @@ class CameraSessionManager: NSObject, ObservableObject {
             found[String(payload.dropFirst("TAPNOTE:".count))] = center
         }
 
-        // Per-marker feedback while registering: highlight each recognized corner.
+        // Per-marker feedback while registering: highlight each recognized corner,
+        // and let auto-frame adjust the camera to hunt for the missing ones.
         if !isCalibratedOnVideoQueue {
             DispatchQueue.main.async { [weak self] in self?.foundMarkers = found }
+            updateAutoFrame(found: found, now: now)
         }
 
         if let tl = found["TL"], let tr = found["TR"],
@@ -699,6 +764,126 @@ class CameraSessionManager: NSObject, ObservableObject {
                 self.calibrationState = .scanning
             }
         }
+    }
+
+    // MARK: - Auto-Frame (registration only)
+
+    // The camera can't aim itself, but it can hunt with zoom: widen (down to the
+    // ultra-wide lens) until all 4 corner QRs appear, then tighten on the found
+    // keyboard. All state is video-queue-owned, like the rest of detection.
+    private var autoFrameActive = true
+    private var lastAutoFrameAction: TimeInterval = 0
+    private var lastHint: AutoFrameHint?
+    private let autoFrameInterval: TimeInterval = 0.5
+    private static let markerNames = ["TL", "TR", "BL", "BR"]
+
+    /// Pauses auto-framing (manual pinch or manual calibration takes over).
+    func pauseAutoFrame() {
+        autoFramePaused = true
+        videoQueue.async { [weak self] in
+            self?.autoFrameActive = false
+            self?.publishHint(nil)
+        }
+    }
+
+    func resumeAutoFrame() {
+        autoFramePaused = false
+        videoQueue.async { [weak self] in self?.autoFrameActive = true }
+    }
+
+    private func updateAutoFrame(found: [String: CGPoint], now: TimeInterval) {
+        guard autoFrameActive else { return }
+        guard now - lastAutoFrameAction >= autoFrameInterval else { return }
+        guard let device = captureDevice else { return }
+        let current = device.videoZoomFactor
+        let minZoom = device.minAvailableVideoZoomFactor
+
+        switch found.count {
+        case 4:
+            // Tighten on the keyboard, keeping a comfortable margin.
+            let xs = found.values.map(\.x), ys = found.values.map(\.y)
+            let span = max(xs.max()! - xs.min()!, ys.max()! - ys.min()!)
+            if span < 0.55 {
+                rampDeviceZoom(to: current * min(1.2, 0.8 / max(span, 0.05)))
+                lastAutoFrameAction = now
+                publishHint(.zoomingIn)
+            } else if span > 0.9 {
+                rampDeviceZoom(to: current * 0.9)
+                lastAutoFrameAction = now
+                publishHint(.zoomingOut)
+            } else {
+                publishHint(nil)   // framed well — hold
+            }
+
+        case 3:
+            let missing = Self.markerNames.filter { found[$0] == nil }
+            // The three known corners determine the fourth (parallelogram).
+            if let estimate = estimateMissingCorner(missing[0], found: found),
+               (0...1).contains(estimate.x), (0...1).contains(estimate.y) {
+                // Predicted spot is IN frame — zooming won't help (occlusion or
+                // glare); show the ghost target instead.
+                publishHint(.aimToward(corners: missing, estimate: estimate))
+            } else {
+                publishHint(.aimToward(corners: missing,
+                                       estimate: nil))
+                zoomOutStep(current: current, minZoom: minZoom, now: now)
+            }
+
+        case 1, 2:
+            let missing = Self.markerNames.filter { found[$0] == nil }
+            if current > minZoom + 0.01 {
+                publishHint(.zoomingOut)
+                zoomOutStep(current: current, minZoom: minZoom, now: now)
+            } else {
+                publishHint(.aimToward(corners: missing, estimate: nil))
+            }
+
+        default:  // 0 markers
+            if current > minZoom + 0.01 {
+                publishHint(.zoomingOut)
+                zoomOutStep(current: current, minZoom: minZoom, now: now)
+            } else {
+                publishHint(.searchWider)
+            }
+        }
+    }
+
+    /// One zoom-out step, pausing at the 1× wide view before committing to the
+    /// ultra-wide lens below it.
+    private func zoomOutStep(current: CGFloat, minZoom: CGFloat, now: TimeInterval) {
+        let target: CGFloat
+        if current > defaultZoom + 0.01 {
+            target = max(defaultZoom, current * 0.85)
+        } else {
+            target = max(minZoom, current * 0.85)
+        }
+        guard target < current - 0.005 else { return }
+        rampDeviceZoom(to: target)
+        lastAutoFrameAction = now
+    }
+
+    /// Where the missing corner must be, from the three found ones:
+    /// opposite corners of a parallelogram sum equally (TL + BR = TR + BL).
+    private func estimateMissingCorner(_ missing: String, found: [String: CGPoint]) -> CGPoint? {
+        func p(_ n: String) -> CGPoint? { found[n] }
+        switch missing {
+        case "TL": if let a = p("TR"), let b = p("BL"), let c = p("BR") {
+            return CGPoint(x: a.x + b.x - c.x, y: a.y + b.y - c.y) }
+        case "TR": if let a = p("TL"), let b = p("BR"), let c = p("BL") {
+            return CGPoint(x: a.x + b.x - c.x, y: a.y + b.y - c.y) }
+        case "BL": if let a = p("TL"), let b = p("BR"), let c = p("TR") {
+            return CGPoint(x: a.x + b.x - c.x, y: a.y + b.y - c.y) }
+        case "BR": if let a = p("TR"), let b = p("BL"), let c = p("TL") {
+            return CGPoint(x: a.x + b.x - c.x, y: a.y + b.y - c.y) }
+        default: break
+        }
+        return nil
+    }
+
+    private func publishHint(_ hint: AutoFrameHint?) {
+        guard hint != lastHint else { return }
+        lastHint = hint
+        DispatchQueue.main.async { [weak self] in self?.autoFrameHint = hint }
     }
 
     private func markersMissing(now: TimeInterval) {

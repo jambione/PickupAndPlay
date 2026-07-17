@@ -52,6 +52,7 @@ struct CameraPreviewView: UIViewRepresentable {
             switch gesture.state {
             case .began:
                 pinchBaseZoom = camera.zoomFactor
+                camera.pauseAutoFrame()   // manual framing wins over auto-frame
             case .changed:
                 camera.setZoom(pinchBaseZoom * gesture.scale)
             default:
