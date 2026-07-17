@@ -257,18 +257,19 @@ class CameraSessionManager: NSObject, ObservableObject {
     /// Target capture rate. Drop to 30 if 60 proves too heavy thermally.
     private let targetFrameRate = 60.0
 
-    /// Smallest ≥720p format that supports `targetFrameRate` — high frame rate
-    /// without paying for pixels Vision doesn't need.
+    /// Largest ≤1080p format that supports `targetFrameRate`. Resolution matters:
+    /// the corner QR codes decode by pixels-per-module, and 1080p buys ~1.5× more
+    /// than 720p — the difference between registering at play distance or not.
     private func bestFormat(for device: AVCaptureDevice) -> AVCaptureDevice.Format? {
         var best: AVCaptureDevice.Format?
-        var bestPixels = Int.max
+        var bestPixels = 0
         for format in device.formats {
             let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
             guard dims.height >= 720, dims.height <= 1080 else { continue }
             guard format.videoSupportedFrameRateRanges.contains(where: { $0.maxFrameRate >= targetFrameRate })
             else { continue }
             let pixels = Int(dims.width) * Int(dims.height)
-            if pixels < bestPixels { bestPixels = pixels; best = format }
+            if pixels > bestPixels { bestPixels = pixels; best = format }
         }
         return best
     }
@@ -315,6 +316,19 @@ class CameraSessionManager: NSObject, ObservableObject {
         } else {
             session.sessionPreset = .hd1280x720
             print("📷 capture format: 1280x720 @ default fps (no 60fps format)")
+        }
+
+        // Keep the tabletop sheet sharp: continuous AF biased to near range.
+        if (try? device.lockForConfiguration()) != nil {
+            if device.isFocusModeSupported(.continuousAutoFocus) {
+                device.focusMode = .continuousAutoFocus
+            }
+            #if !targetEnvironment(macCatalyst)
+            if device.isAutoFocusRangeRestrictionSupported {
+                device.autoFocusRangeRestriction = .near
+            }
+            #endif
+            device.unlockForConfiguration()
         }
 
         // Output
@@ -695,6 +709,8 @@ class CameraSessionManager: NSObject, ObservableObject {
     /// robust to lighting/angle, and the app switches key layouts automatically.
     private func detectQRCorners(_ results: [VNBarcodeObservation], now: TimeInterval) {
         var byVariant: [KeyboardVariant: [String: CGPoint]] = [:]
+        var spanSum: CGFloat = 0
+        var spanCount = 0
         for obs in results {
             guard let payload = obs.payloadStringValue,
                   payload.hasPrefix("TAPNOTE:") else { continue }
@@ -706,7 +722,10 @@ class CameraSessionManager: NSObject, ObservableObject {
             // the fingertip coordinate space.
             let center = CGPoint(x: obs.boundingBox.midX, y: 1 - obs.boundingBox.midY)
             byVariant[variant, default: [:]][suffix] = center
+            spanSum += max(obs.boundingBox.width, obs.boundingBox.height)
+            spanCount += 1
         }
+        let avgMarkerSpan = spanCount > 0 ? spanSum / CGFloat(spanCount) : 0
 
         // If both sheets are somehow in view, prefer a complete set, else the fullest.
         let best = byVariant.max { a, b in
@@ -722,7 +741,7 @@ class CameraSessionManager: NSObject, ObservableObject {
         // and let auto-frame adjust the camera to hunt for the missing ones.
         if !isCalibratedOnVideoQueue {
             DispatchQueue.main.async { [weak self] in self?.foundMarkers = found }
-            updateAutoFrame(found: found, now: now)
+            updateAutoFrame(found: found, avgMarkerSpan: avgMarkerSpan, now: now)
         }
 
         if let tl = found["TL"], let tr = found["TR"],
@@ -833,12 +852,31 @@ class CameraSessionManager: NSObject, ObservableObject {
         videoQueue.async { [weak self] in self?.autoFrameActive = true }
     }
 
-    private func updateAutoFrame(found: [String: CGPoint], now: TimeInterval) {
+    /// Decoded markers smaller than this (normalized frame fraction) suggest the
+    /// missing corners are in frame but too small to decode — zoom IN, not out.
+    private let smallMarkerSpan: CGFloat = 0.045
+
+    private func updateAutoFrame(found: [String: CGPoint], avgMarkerSpan: CGFloat, now: TimeInterval) {
         guard autoFrameActive else { return }
         guard now - lastAutoFrameAction >= autoFrameInterval else { return }
         guard let device = captureDevice else { return }
         let current = device.videoZoomFactor
         let minZoom = device.minAvailableVideoZoomFactor
+
+        // Partial detection with tiny-but-decoding markers: the sheet is small in
+        // frame, so the missing corners are likely present yet unreadable. Widening
+        // makes them smaller still — tighten instead (while the found cluster
+        // comfortably fits).
+        if (1...3).contains(found.count), avgMarkerSpan > 0, avgMarkerSpan < smallMarkerSpan {
+            let xs = found.values.map(\.x), ys = found.values.map(\.y)
+            let clusterSpan = max((xs.max()! - xs.min()!), (ys.max()! - ys.min()!))
+            if clusterSpan < 0.5 {
+                rampDeviceZoom(to: current * 1.15)
+                lastAutoFrameAction = now
+                publishHint(.zoomingIn)
+                return
+            }
+        }
 
         switch found.count {
         case 4:
