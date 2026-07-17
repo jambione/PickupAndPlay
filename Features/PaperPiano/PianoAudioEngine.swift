@@ -99,8 +99,8 @@ class PianoAudioEngine {
     }
 
     private func generalMIDISoundbankURL() -> URL {
-        // macOS / iOS both ship a default DLS soundbank
-        #if os(macOS)
+        // Mac (incl. Mac Catalyst, which reports os(iOS)) ships the GS DLS soundbank.
+        #if targetEnvironment(macCatalyst) || os(macOS)
         return URL(fileURLWithPath: "/System/Library/Components/CoreAudio.component/Contents/Resources/gs_instruments.dls")
         #else
         return URL(fileURLWithPath: "/System/Library/Audio/Sounds/MusicalInstruments")
@@ -122,6 +122,22 @@ class PianoAudioEngine {
                 DispatchQueue.global().asyncAfter(deadline: .now() + 1.2) { [weak self] in
                     self?.sampler.stopNote(midiNote, onChannel: 0)
                 }
+            } else {
+                self.playSynthNote(key: key, velocity: velocity)
+            }
+        }
+    }
+
+    /// Note-on for a sustained press. Unlike `playNote` there is no scheduled
+    /// note-off — the note rings until `stopNote(key:)` is called (finger lift).
+    /// The synthesis fallback can't be sustained, so it plays its usual decay.
+    func holdNote(key: PaperPianoKey, velocity: Float = 0.8) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            if self.usingSampler {
+                let midiNote = self.midiNoteNumber(for: key)
+                let midiVelocity = UInt8(min(127, Int(velocity * 127)))
+                self.sampler.startNote(midiNote, withVelocity: midiVelocity, onChannel: 0)
             } else {
                 self.playSynthNote(key: key, velocity: velocity)
             }
@@ -209,7 +225,11 @@ class PianoAudioEngine {
         engine.connect(player, to: reverb, format: buffer.format)
         player.play()
         player.scheduleBuffer(buffer) { [weak self] in
-            self?.engine.detach(player)
+            // This completion handler runs on AVAudioEngine's internal queue. Calling
+            // detachNode() directly here re-enters that queue and traps (SIGTRAP:
+            // "dispatch_sync called on queue already owned by current thread").
+            // Hop onto our audio queue so the detach happens off the callback thread.
+            self?.audioQueue.async { self?.engine.detach(player) }
         }
     }
 }

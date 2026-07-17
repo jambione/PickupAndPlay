@@ -82,6 +82,9 @@ struct HomeView: View {
                         }
                     }
 
+                    // Paper Piano — camera-based play
+                    PaperPianoEntryCard()
+
                     // Quick instrument switch
                     InstrumentSwitchBar()
 

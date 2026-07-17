@@ -89,6 +89,14 @@ private struct ScanningView: View {
                         Button("Tap to calibrate manually") { manualCalibrationMode = true }
                             .font(.system(size: 13, weight: .medium)).foregroundColor(.orange)
                     }
+                    // Camera authorization state (black preview usually means no access)
+                    if camera.authStatus == .denied || camera.authStatus == .restricted {
+                        Button("Enable Camera Access") { camera.openSystemSettings() }
+                            .font(.system(size: 13, weight: .semibold)).foregroundColor(.orange)
+                    } else if camera.authStatus != .authorized {
+                        Text("Camera: \(camera.authStatus.rawValue)")
+                            .font(.system(size: 11)).foregroundColor(.white.opacity(0.5))
+                    }
                     Button { showHelp = true } label: {
                         Label("Setup Help", systemImage: "questionmark.circle")
                             .font(.system(size: 13)).foregroundColor(.white.opacity(0.6))

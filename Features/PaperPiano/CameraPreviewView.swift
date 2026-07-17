@@ -16,6 +16,9 @@ struct CameraPreviewView: UIViewRepresentable {
         let tap = UITapGestureRecognizer(target: context.coordinator,
                                          action: #selector(Coordinator.handleTap(_:)))
         view.addGestureRecognizer(tap)
+        let pinch = UIPinchGestureRecognizer(target: context.coordinator,
+                                             action: #selector(Coordinator.handlePinch(_:)))
+        view.addGestureRecognizer(pinch)
         return view
     }
 
@@ -36,12 +39,24 @@ struct CameraPreviewView: UIViewRepresentable {
         let camera: CameraSessionManager
         var onTap: ((CGPoint, CGSize) -> Void)?
         var viewSize: CGSize = .zero
+        private var pinchBaseZoom: CGFloat = 1.0
 
         init(camera: CameraSessionManager) { self.camera = camera }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
             let pt = gesture.location(in: gesture.view)
             onTap?(pt, viewSize)
+        }
+
+        @objc func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+            switch gesture.state {
+            case .began:
+                pinchBaseZoom = camera.zoomFactor
+            case .changed:
+                camera.setZoom(pinchBaseZoom * gesture.scale)
+            default:
+                break
+            }
         }
     }
 }

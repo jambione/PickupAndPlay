@@ -15,13 +15,12 @@ class AppState: ObservableObject {
 // MARK: - Root View
 
 struct RootView: View {
-    @EnvironmentObject var appState: AppState
-
+    // Paper Piano only for now. Onboarding + the Home/Lessons/Progress/Awards
+    // tabs are intentionally bypassed (their code is kept for later). To restore
+    // the full app, swap this body back to the MainTabView/OnboardingView switch.
     var body: some View {
-        if appState.hasCompletedOnboarding {
-            MainTabView()
-        } else {
-            OnboardingView()
+        NavigationStack {
+            PaperPianoView()
         }
     }
 }

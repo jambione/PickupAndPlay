@@ -22,7 +22,7 @@ struct PaperPianoKey: Identifiable {
         return 440.0 * pow(2.0, semitones / 12.0)
     }
 
-    // MARK: - Static layout for 2 octaves C3–C5
+    // MARK: - Static layout for 3 octaves C3–C6 (matches the 3-octave printed PDF)
 
     static let layout: [PaperPianoKey] = {
         // White keys: C3–C6 (22 white keys, 3 full octaves + top C)
@@ -79,33 +79,93 @@ struct KeyboardCalibration {
     var corners: [CGPoint] = []
     var isCalibrated: Bool { corners.count == 4 }
 
-    /// Given a normalized point within the keyboard (0…1 each axis),
-    /// maps it to a point in the camera preview coordinate space.
-    func previewPoint(from normalized: CGPoint, in previewSize: CGSize) -> CGPoint? {
-        guard isCalibrated else { return nil }
-        let tl = corners[0], tr = corners[1], bl = corners[2], br = corners[3]
-        // Bilinear interpolation
-        let tx = normalized.x, ty = 1.0 - normalized.y // flip Y so top of keyboard = y=1 in norm
-        let top    = CGPoint(x: tl.x + (tr.x - tl.x) * tx, y: tl.y + (tr.y - tl.y) * tx)
-        let bottom = CGPoint(x: bl.x + (br.x - bl.x) * tx, y: bl.y + (br.y - bl.y) * tx)
-        let result = CGPoint(x: top.x + (bottom.x - top.x) * ty,
-                             y: top.y + (bottom.y - top.y) * ty)
-        return result
+    /// Maps a point in camera/preview space to normalized 0…1 keyboard coordinates,
+    /// applying a full perspective (keystone) correction from the 4 calibration
+    /// corners. This "straightens out" a keyboard the camera sees at an angle, so a
+    /// fingertip anywhere on the skewed paper lands on the correct key.
+    ///
+    /// `previewPt` may be given either already-normalized (with `previewSize` = 1×1,
+    /// as the finger tracker does) or in view points (with the real preview size, as
+    /// tap input does); it is normalized to the same 0…1 space as `corners` first.
+    func normalizedPoint(from previewPt: CGPoint, previewSize: CGSize) -> CGPoint? {
+        guard isCalibrated, previewSize.width > 0, previewSize.height > 0 else { return nil }
+        let p = CGPoint(x: previewPt.x / previewSize.width,
+                        y: previewPt.y / previewSize.height)
+        guard let h = Self.cameraToKeyboardHomography(corners: corners) else { return nil }
+        return Self.apply(h, to: p)
     }
 
-    /// Maps a point in preview space to a normalized 0…1 keyboard coordinate.
-    func normalizedPoint(from previewPt: CGPoint, previewSize: CGSize) -> CGPoint? {
-        guard isCalibrated else { return nil }
-        // Inverse bilinear — approximate using the bounding rect for now
-        let xs = corners.map { $0.x }
-        let ys = corners.map { $0.y }
-        let minX = xs.min()!, maxX = xs.max()!
-        let minY = ys.min()!, maxY = ys.max()!
-        guard maxX > minX, maxY > minY else { return nil }
-        return CGPoint(
-            x: (previewPt.x - minX) / (maxX - minX),
-            y: (previewPt.y - minY) / (maxY - minY)
-        )
+    // MARK: - Perspective (homography) mapping
+
+    /// Homography mapping the camera's (possibly skewed) keyboard quad → the unit
+    /// keyboard rectangle. Corners are re-ordered to TL, TR, BL, BR so the result is
+    /// robust to the order they were captured/tapped in.
+    private static func cameraToKeyboardHomography(corners: [CGPoint]) -> [Double]? {
+        guard let c = orderedCorners(corners) else { return nil }
+        // Keyboard space: x 0→1 left→right, y 0→1 front→back (black keys near y=1).
+        let dst = [CGPoint(x: 0, y: 1), CGPoint(x: 1, y: 1),
+                   CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0)]
+        return solveHomography(src: c, dst: dst)
+    }
+
+    /// Sorts 4 points into [topLeft, topRight, bottomLeft, bottomRight]
+    /// (preview space has y increasing downward, so smaller y = top).
+    private static func orderedCorners(_ pts: [CGPoint]) -> [CGPoint]? {
+        guard pts.count == 4 else { return nil }
+        let byY = pts.sorted { $0.y < $1.y }
+        let top = Array(byY.prefix(2)).sorted { $0.x < $1.x }
+        let bottom = Array(byY.suffix(2)).sorted { $0.x < $1.x }
+        return [top[0], top[1], bottom[0], bottom[1]]
+    }
+
+    /// Solves the 8 homography parameters [a,b,c,d,e,f,g,h] mapping src→dst (h33 = 1).
+    private static func solveHomography(src: [CGPoint], dst: [CGPoint]) -> [Double]? {
+        guard src.count == 4, dst.count == 4 else { return nil }
+        var A = [[Double]](repeating: [Double](repeating: 0, count: 8), count: 8)
+        var b = [Double](repeating: 0, count: 8)
+        for i in 0..<4 {
+            let sx = Double(src[i].x), sy = Double(src[i].y)
+            let dx = Double(dst[i].x), dy = Double(dst[i].y)
+            A[2 * i]     = [sx, sy, 1, 0, 0, 0, -sx * dx, -sy * dx]; b[2 * i]     = dx
+            A[2 * i + 1] = [0, 0, 0, sx, sy, 1, -sx * dy, -sy * dy]; b[2 * i + 1] = dy
+        }
+        return gaussianSolve(A: &A, b: &b)
+    }
+
+    /// Applies homography `h` to point `p`, returning nil if projectively degenerate.
+    private static func apply(_ h: [Double], to p: CGPoint) -> CGPoint? {
+        let x = Double(p.x), y = Double(p.y)
+        let denom = h[6] * x + h[7] * y + 1
+        guard abs(denom) > 1e-9 else { return nil }
+        return CGPoint(x: (h[0] * x + h[1] * y + h[2]) / denom,
+                       y: (h[3] * x + h[4] * y + h[5]) / denom)
+    }
+
+    /// Gaussian elimination with partial pivoting for a small dense system.
+    private static func gaussianSolve(A: inout [[Double]], b: inout [Double]) -> [Double]? {
+        let n = b.count
+        for col in 0..<n {
+            var pivot = col
+            var maxVal = abs(A[col][col])
+            for r in (col + 1)..<n where abs(A[r][col]) > maxVal {
+                maxVal = abs(A[r][col]); pivot = r
+            }
+            guard maxVal > 1e-12 else { return nil }
+            if pivot != col { A.swapAt(col, pivot); b.swapAt(col, pivot) }
+            for r in (col + 1)..<n {
+                let factor = A[r][col] / A[col][col]
+                if factor == 0 { continue }
+                for c in col..<n { A[r][c] -= factor * A[col][c] }
+                b[r] -= factor * b[col]
+            }
+        }
+        var x = [Double](repeating: 0, count: n)
+        for row in stride(from: n - 1, through: 0, by: -1) {
+            var sum = b[row]
+            for c in (row + 1)..<n { sum -= A[row][c] * x[c] }
+            x[row] = sum / A[row][row]
+        }
+        return x
     }
 
     /// Returns which piano key (if any) a preview-space touch point lands on.
