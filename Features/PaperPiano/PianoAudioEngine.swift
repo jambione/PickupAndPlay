@@ -81,9 +81,14 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
 // MARK: - Piano Audio Engine
 
 /// Singleton audio engine that produces rich instrument tones.
-/// Uses AVAudioUnitSampler with the bundled GeneralUser GS SoundFont when
-/// available (system DLS bank on Mac Catalyst as a fallback), and falls back
-/// to a multi-oscillator additive synthesis engine as a last resort.
+///
+/// Playback uses Apple's AUMIDISynth unit with the bundled GeneralUser GS
+/// SoundFont (system DLS bank on Mac as a fallback). AUMIDISynth — not
+/// AVAudioUnitSampler — because AUSampler is unreliable rendering third-party
+/// SF2 sample loops (SIGSEGV in SamplerNote::Render reading past the end of
+/// the mapped sample region), and because AUMIDISynth switches instruments
+/// with plain MIDI program changes: no bank reloads at runtime at all.
+/// Falls back to a multi-oscillator additive synthesis engine as a last resort.
 class PianoAudioEngine {
 
     static let shared = PianoAudioEngine()
@@ -91,7 +96,15 @@ class PianoAudioEngine {
     // MARK: Private
 
     private let engine = AVAudioEngine()
-    private let sampler = AVAudioUnitSampler()
+    private let synthUnit: AVAudioUnitMIDIInstrument = {
+        let description = AudioComponentDescription(
+            componentType: kAudioUnitType_MusicDevice,
+            componentSubType: kAudioUnitSubType_MIDISynth,
+            componentManufacturer: kAudioUnitManufacturer_Apple,
+            componentFlags: 0,
+            componentFlagsMask: 0)
+        return AVAudioUnitMIDIInstrument(audioComponentDescription: description)
+    }()
     private let reverb  = AVAudioUnitReverb()
     private let eq      = AVAudioUnitEQ(numberOfBands: 3)
     private var usingSampler = false
@@ -103,10 +116,6 @@ class PianoAudioEngine {
     /// The active instrument (audioQueue-only; UI keeps its own selection state).
     private(set) var currentPreset: InstrumentPreset = .grandPiano
 
-    /// The preset whose bank/program is actually loaded in the sampler
-    /// (audioQueue-only) — lets loadInstrument skip redundant, risky reloads.
-    private var loadedPreset: InstrumentPreset?
-
     // MARK: - Init
 
     private init() {
@@ -116,14 +125,17 @@ class PianoAudioEngine {
     private func setupEngine() {
         setupAudioSession()
 
-        // Graph: sampler → reverb → eq → mainMixer → output
-        engine.attach(sampler)
+        // Graph: synth → reverb → eq → mainMixer → output
+        engine.attach(synthUnit)
         engine.attach(reverb)
         engine.attach(eq)
 
-        engine.connect(sampler, to: reverb, format: nil)
+        engine.connect(synthUnit, to: reverb, format: nil)
         engine.connect(reverb, to: eq, format: nil)
         engine.connect(eq, to: engine.mainMixerNode, format: nil)
+
+        // Point the synth at its SoundFont before the engine initializes it.
+        usingSampler = loadSoundBank()
 
         // Reverb — small hall for warmth
         reverb.loadFactoryPreset(.mediumHall)
@@ -150,6 +162,7 @@ class PianoAudioEngine {
 
         do {
             try engine.start()
+            if usingSampler { preloadPrograms() }
             loadInstrument(.grandPiano)
         } catch {
             print("Audio engine start error: \(error)")
@@ -160,23 +173,63 @@ class PianoAudioEngine {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-        // Low-latency I/O so notes speak as soon as a finger lands.
-        try? session.setPreferredIOBufferDuration(0.005)
-        try? session.setPreferredSampleRate(48_000)
+        // Low-latency I/O so notes speak as soon as a finger lands. 44.1 kHz
+        // matches the SoundFont's native sample rate (no live resampling).
+        try? session.setPreferredIOBufferDuration(0.01)
+        try? session.setPreferredSampleRate(44_100)
         try? session.setActive(true)
         #endif
     }
 
-    // MARK: - Instrument Loading
+    // MARK: - SoundFont / Instrument Loading
 
-    /// Switches the sampler to `preset`, silencing anything currently sounding
-    /// and applying the preset's effects profile.
+    /// Hands the SoundFont to the synth (once, before rendering ever starts).
+    private func loadSoundBank() -> Bool {
+        guard let bank = soundbankURL() else {
+            print("No soundbank available, using synthesis")
+            return false
+        }
+        var bankRef = bank as CFURL   // the property expects a CFURL object reference
+        let status = AudioUnitSetProperty(
+            synthUnit.audioUnit,
+            AudioUnitPropertyID(kMusicDeviceProperty_SoundBankURL),
+            AudioUnitScope(kAudioUnitScope_Global),
+            0, &bankRef, UInt32(MemoryLayout<CFURL>.size))
+        if status != noErr {
+            print("SoundBank load failed (\(status)), using synthesis")
+            return false
+        }
+        print("✅ SoundFont attached: \(bank.lastPathComponent)")
+        return true
+    }
+
+    /// AUMIDISynth loads a program's samples only when a program change arrives
+    /// while "preload" is enabled — warm all presets once so switching is instant.
+    private func preloadPrograms() {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            var enabled: UInt32 = 1
+            let propID = AudioUnitPropertyID(kAUMIDISynthProperty_EnablePreload)
+            let scope = AudioUnitScope(kAudioUnitScope_Global)
+            AudioUnitSetProperty(self.synthUnit.audioUnit, propID, scope, 0,
+                                 &enabled, UInt32(MemoryLayout<UInt32>.size))
+            for preset in InstrumentPreset.allCases {
+                MusicDeviceMIDIEvent(self.synthUnit.audioUnit,
+                                     0xC0, UInt32(preset.gmProgram), 0, 0)
+            }
+            enabled = 0
+            AudioUnitSetProperty(self.synthUnit.audioUnit, propID, scope, 0,
+                                 &enabled, UInt32(MemoryLayout<UInt32>.size))
+        }
+    }
+
+    /// Switches to `preset` with a plain MIDI program change (no bank reload),
+    /// silencing anything currently sounding and applying the effects profile.
     func loadInstrument(_ preset: InstrumentPreset) {
         audioQueue.async { [weak self] in
             guard let self else { return }
             self.currentPreset = preset
 
-            // Effects profile applies even when the bank is already loaded.
             self.reverb.wetDryMix = preset.reverbMix
             if self.eq.bands.count >= 3 {
                 let g = preset.eqGains
@@ -185,43 +238,12 @@ class PianoAudioEngine {
                 self.eq.bands[2].gain = g.high
             }
 
-            // Same bank+program already in the sampler: nothing to (re)load.
-            // Reloading is not free of risk (see below), so never do it idly.
-            guard !(self.usingSampler && self.loadedPreset == preset) else { return }
-
+            guard self.usingSampler else { return }
             // Silence held notes so nothing hangs across the program change.
-            for note in self.soundingNotes { self.sampler.stopNote(note, onChannel: 0) }
+            for note in self.soundingNotes { self.synthUnit.stopNote(note, onChannel: 0) }
             self.soundingNotes.removeAll()
-
-            guard let bank = self.soundbankURL() else {
-                print("No soundbank available, using synthesis")
-                self.usingSampler = false
-                self.loadedPreset = nil
-                return
-            }
-
-            // The render thread keeps reading the old bank's sample memory while
-            // voices ring out (release tails render even after note-off). Swapping
-            // the bank mid-render reads freed memory and crashes (SIGSEGV in
-            // SamplerNote::Render) — halt the engine around the swap.
-            let wasRunning = self.engine.isRunning
-            if wasRunning { self.engine.pause() }
-            do {
-                try self.sampler.loadSoundBankInstrument(
-                    at: bank,
-                    program: preset.gmProgram,
-                    bankMSB: UInt8(kAUSampler_DefaultMelodicBankMSB),
-                    bankLSB: UInt8(kAUSampler_DefaultBankLSB)
-                )
-                self.usingSampler = true
-                self.loadedPreset = preset
-                print("✅ Sampler loaded: \(preset.displayName) from \(bank.lastPathComponent)")
-            } catch {
-                print("Sampler failed for \(preset.displayName) (\(error)), falling back to synthesis")
-                self.usingSampler = false
-                self.loadedPreset = nil
-            }
-            if wasRunning { try? self.engine.start() }
+            self.synthUnit.sendProgramChange(preset.gmProgram, onChannel: 0)
+            print("🎹 Instrument: \(preset.displayName) (program \(preset.gmProgram))")
         }
     }
 
@@ -246,12 +268,17 @@ class PianoAudioEngine {
             let midiVelocity = UInt8(min(127, Int(velocity * 127)))
 
             if self.usingSampler {
-                self.sampler.startNote(midiNote, withVelocity: midiVelocity, onChannel: 0)
+                // Re-striking a sounding note without a note-off stacks voices —
+                // always release first.
+                if self.soundingNotes.contains(midiNote) {
+                    self.synthUnit.stopNote(midiNote, onChannel: 0)
+                }
+                self.synthUnit.startNote(midiNote, withVelocity: midiVelocity, onChannel: 0)
                 self.soundingNotes.insert(midiNote)
 
                 // Schedule note-off after 1.2 seconds
                 self.audioQueue.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-                    self?.sampler.stopNote(midiNote, onChannel: 0)
+                    self?.synthUnit.stopNote(midiNote, onChannel: 0)
                     self?.soundingNotes.remove(midiNote)
                 }
             } else {
@@ -269,7 +296,10 @@ class PianoAudioEngine {
             if self.usingSampler {
                 let midiNote = self.midiNoteNumber(for: key)
                 let midiVelocity = UInt8(min(127, Int(velocity * 127)))
-                self.sampler.startNote(midiNote, withVelocity: midiVelocity, onChannel: 0)
+                if self.soundingNotes.contains(midiNote) {
+                    self.synthUnit.stopNote(midiNote, onChannel: 0)
+                }
+                self.synthUnit.startNote(midiNote, withVelocity: midiVelocity, onChannel: 0)
                 self.soundingNotes.insert(midiNote)
             } else {
                 self.playSynthNote(key: key, velocity: velocity)
@@ -294,7 +324,7 @@ class PianoAudioEngine {
             guard let self else { return }
             let midiNote = self.midiNoteNumber(for: key)
             if self.usingSampler {
-                self.sampler.stopNote(midiNote, onChannel: 0)
+                self.synthUnit.stopNote(midiNote, onChannel: 0)
                 self.soundingNotes.remove(midiNote)
             }
         }

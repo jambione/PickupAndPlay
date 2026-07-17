@@ -123,9 +123,14 @@ class CameraSessionManager: NSObject, ObservableObject {
 
     // Tunables — normalized image units (0…1). Need on-device tuning.
     private let handAssocRadius: Double = 0.3      // max hand-centroid travel between frames
-    private let keyConfirmFrames = 2               // frames a finger must hold a key before it sounds (debounces boundary flicker)
+    private let keyConfirmFrames = 3               // frames a finger must hold a key before it sounds (debounces boundary flicker)
     private let historySpan: TimeInterval = 0.18
     private let fingerTimeout: TimeInterval = 0.25
+    private let repressInterval: TimeInterval = 0.09  // min gap between note-ons of the same key
+
+    /// Last camera-triggered note-on per key (video-queue-only) — caps how fast a
+    /// flickering boundary can hammer the synth with retriggers.
+    private var lastCameraPress: [Int: TimeInterval] = [:]
 
     // MARK: - Lifecycle
 
@@ -573,6 +578,9 @@ class CameraSessionManager: NSObject, ObservableObject {
     /// directly from the video queue — no main-thread hop in the sound path.
     private func pressKey(_ key: PaperPianoKey, velocity: Float) {
         guard !pressedKeyIDs.contains(key.id) else { return }
+        let now = Date().timeIntervalSinceReferenceDate
+        if let last = lastCameraPress[key.id], now - last < repressInterval { return }
+        lastCameraPress[key.id] = now
         pressedKeyIDs.insert(key.id)
         PianoAudioEngine.shared.holdNote(key: key, velocity: velocity)
 
