@@ -254,12 +254,40 @@ let malletBars: SheetDefinition = {
         qrSizeMM: 42, groupSize: CGSize(width: w, height: wl))
 }()
 
+/// Zither: 2 diatonic octaves (C3–C5, 15 strings), thin gapped strips rather
+/// than contiguous bars — same 40%-of-slot string width as
+/// PaperPianoKey.makeStringLayout, kept in sync by hand.
+let zither: SheetDefinition = {
+    let labels = ["C3","D3","E3","F3","G3","A3","B3",
+                  "C4","D4","E4","F4","G4","A4","B4","C5"]
+    let n = labels.count
+    let slot: CGFloat = 24.0, stringW = slot * 0.4, stringL: CGFloat = 180.0
+    var zones: [Zone] = []
+    for (i, label) in labels.enumerated() {
+        let x = CGFloat(i) * slot + (slot - stringW) / 2
+        let r = CGRect(x: x, y: 0, width: stringW, height: stringL)
+        let isEnd = i == 0 || i == n - 1
+        zones.append(Zone(label: label, rect: r,
+                          isAccent: label.hasPrefix("C") && label.count == 2,
+                          isCornerAdjacent: isEnd))
+    }
+    let w = CGFloat(n) * slot
+    let margin: CGFloat = 40
+    return SheetDefinition(
+        name: "zither", title: "TapNote · Zither (2 Octaves, C3–C5)",
+        subtitle: "Print on A3 at 100% scale. Pluck a string — lay flat, keep all 4 QR squares visible.",
+        qrToken: "ZITHER", pageSize: CGSize(width: 420, height: 297),
+        origin: CGPoint(x: (420 - w) / 2, y: margin), zones: zones,
+        qrSizeMM: 42, groupSize: CGSize(width: w, height: stringL))
+}()
+
 // MARK: - Registry
 
 let registry: [String: SheetDefinition] = [
     "2oct": twoOctavePiano,
     "drumkit": drumKit,
     "mallet": malletBars,
+    "zither": zither,
 ]
 
 // MARK: - CLI

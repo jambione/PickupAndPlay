@@ -12,6 +12,8 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
     // these just add more GM timbres to choose from regardless of which
     // sheet (piano or mallet bars) is active.
     case xylophone, glockenspiel, vibraphone, marimba, tubularBells, handbells
+    // Zither/harp family (Paper Orchestra Phase 3).
+    case orchestralHarp
 
     var id: String { rawValue }
 
@@ -28,6 +30,7 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
         case .marimba:       return "Marimba"
         case .tubularBells:  return "Tubular Bells"
         case .handbells:     return "Handbells"
+        case .orchestralHarp: return "Harp"
         }
     }
 
@@ -40,6 +43,7 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
         case .strings:       return "music.quarternote.3"
         case .xylophone, .glockenspiel, .vibraphone, .marimba: return "music.note"
         case .tubularBells, .handbells: return "bell.fill"
+        case .orchestralHarp: return "pianokeys"
         }
     }
 
@@ -60,6 +64,7 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
         // SoundFont renderings of this GM slot lean more wind-chime than
         // church-handbell. Listen-test before advertising it as the real thing.
         case .handbells:     return 112
+        case .orchestralHarp: return 46  // Orchestral Harp
         }
     }
 
@@ -76,6 +81,7 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
         case .marimba:       return 22
         case .tubularBells:  return 38
         case .handbells:     return 34
+        case .orchestralHarp: return 30
         }
     }
 
@@ -93,6 +99,7 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
         case .marimba:       return (0.5, 0.0, 1.0)
         case .tubularBells:  return (0.0, 0.0, 2.0)
         case .handbells:     return (-1.0, 0.5, 2.5)
+        case .orchestralHarp: return (0.5, 0.0, 1.5)
         }
     }
 
@@ -102,7 +109,9 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
     /// SoundFont's own envelope regardless of this flag.
     var sustains: Bool {
         switch self {
-        case .grandPiano, .electricPiano, .xylophone, .marimba: return false
+        // A plucked harp decays audibly like a struck mallet, not a bell's
+        // long resonance or an organ's indefinite sustain.
+        case .grandPiano, .electricPiano, .xylophone, .marimba, .orchestralHarp: return false
         case .pipeOrgan, .synthLead, .strings,
              .glockenspiel, .vibraphone, .tubularBells, .handbells: return true
         }

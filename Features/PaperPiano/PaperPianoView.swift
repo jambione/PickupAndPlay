@@ -79,7 +79,7 @@ struct PaperPianoView: View {
                 if showKeyboard {
                     ZStack {
                         Color(white: 0.07)
-                        if camera.activeVariant == .drumKit {
+                        if camera.activeVariant.usesZoneBoard {
                             ZoneBoardView(activeNotes: camera.activeNotes,
                                          variant: camera.activeVariant) { key in
                                 camera.triggerKey(key, velocity: 0.85)
@@ -742,6 +742,7 @@ enum BundledDoc: CaseIterable {
     case keyboardQR
     case drumKitA3
     case malletBellsA3
+    case zitherA3
 
     var resourceName: String {
         switch self {
@@ -750,6 +751,7 @@ enum BundledDoc: CaseIterable {
         case .keyboardQR:          return "TapNote_Keyboard_QR"
         case .drumKitA3:           return "TapNote_DrumKit_A3"
         case .malletBellsA3:      return "TapNote_MalletBells_A3"
+        case .zitherA3:           return "TapNote_Zither_A3"
         }
     }
 
@@ -760,6 +762,7 @@ enum BundledDoc: CaseIterable {
         case .keyboardQR:          return "Original QR Test Sheet"
         case .drumKitA3:           return "Drum Kit Sheet — one A3 page"
         case .malletBellsA3:      return "Mallet & Bells Sheet — one A3 page"
+        case .zitherA3:           return "Zither Sheet — one A3 page"
         }
     }
 

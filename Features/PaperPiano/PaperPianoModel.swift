@@ -129,6 +129,33 @@ struct PaperPianoKey: Identifiable {
         ],
         blacks: [])
 
+    /// Builds thin, gapped string zones (unlike `makeLayout`'s contiguous
+    /// full-width bars) — each string is a narrow strip centered in its own
+    /// even slot, with visible gaps between strings like a real zither/harp.
+    /// Rendered via `ZoneBoardView` (drives position purely from
+    /// `normalizedFrame`), not `VirtualPianoView` (which ignores
+    /// `normalizedFrame` and always tiles keys edge-to-edge by index — wrong
+    /// for anything with gaps).
+    private static func makeStringLayout(pitches: [(NotePitch, Int)]) -> [PaperPianoKey] {
+        let n = pitches.count
+        let slot = 1.0 / Double(n)
+        let stringWidth = slot * 0.4
+        return pitches.enumerated().map { i, pitch in
+            var k = PaperPianoKey(id: i, note: pitch.0, octave: pitch.1,
+                                  isBlack: false, whiteKeyIndex: i, blackKeyOffset: 0)
+            let x = slot * Double(i) + (slot - stringWidth) / 2.0
+            k.normalizedFrame = CGRect(x: x, y: 0, width: stringWidth, height: 1.0)
+            return k
+        }
+    }
+
+    /// Zither: 2 diatonic octaves, C3–C5 (15 strings, no sharps/flats — real
+    /// zithers/lap harps are typically diatonic, one string per scale degree).
+    static let zitherLayout: [PaperPianoKey] = makeStringLayout(pitches: [
+        (.C,3),(.D,3),(.E,3),(.F,3),(.G,3),(.A,3),(.B,3),
+        (.C,4),(.D,4),(.E,4),(.F,4),(.G,4),(.A,4),(.B,4),(.C,5)
+    ])
+
     /// Legacy alias: the 3-octave layout (existing call sites; prefer variant APIs).
     static var layout: [PaperPianoKey] { threeOctaveLayout }
 
@@ -138,6 +165,7 @@ struct PaperPianoKey: Identifiable {
         case .twoOctave:   return twoOctaveLayout
         case .drumKit:     return drumKitLayout
         case .malletBars:  return malletBarsLayout
+        case .zither:      return zitherLayout
         }
     }
 
@@ -145,6 +173,7 @@ struct PaperPianoKey: Identifiable {
     private static let byIDTwo = Dictionary(uniqueKeysWithValues: twoOctaveLayout.map { ($0.id, $0) })
     private static let byIDDrum = Dictionary(uniqueKeysWithValues: drumKitLayout.map { ($0.id, $0) })
     private static let byIDMallet = Dictionary(uniqueKeysWithValues: malletBarsLayout.map { ($0.id, $0) })
+    private static let byIDZither = Dictionary(uniqueKeysWithValues: zitherLayout.map { ($0.id, $0) })
 
     static func byID(_ id: Int, variant: KeyboardVariant) -> PaperPianoKey? {
         switch variant {
@@ -152,6 +181,7 @@ struct PaperPianoKey: Identifiable {
         case .twoOctave:   return byIDTwo[id]
         case .drumKit:     return byIDDrum[id]
         case .malletBars:  return byIDMallet[id]
+        case .zither:      return byIDZither[id]
         }
     }
 }
@@ -174,7 +204,7 @@ enum InteractionModel {
 /// explicitly, `TAPNOTE:2:TL` = 2-octave), so the paper identifies itself and
 /// the app switches layouts automatically.
 enum KeyboardVariant: String, CaseIterable {
-    case threeOctave, twoOctave, drumKit, malletBars
+    case threeOctave, twoOctave, drumKit, malletBars, zither
 
     var displayName: String {
         switch self {
@@ -182,23 +212,37 @@ enum KeyboardVariant: String, CaseIterable {
         case .twoOctave:   return "2 octaves"
         case .drumKit:     return "Drum Kit"
         case .malletBars:  return "Mallet & Bells"
+        case .zither:      return "Zither"
         }
     }
 
     var interactionModel: InteractionModel {
         switch self {
-        case .threeOctave, .twoOctave: return .sustained
-        case .drumKit, .malletBars:    return .struckOnce
+        case .threeOctave, .twoOctave:          return .sustained
+        case .drumKit, .malletBars, .zither:    return .struckOnce
         }
     }
 
     /// MIDI channel notes go out on. Independent of `interactionModel` —
-    /// mallets are struck but still melodic, so they stay on channel 0;
-    /// only percussion needs the GM percussion channel (9).
+    /// mallets/zither are struck but still melodic, so they stay on channel
+    /// 0; only percussion needs the GM percussion channel (9).
     var midiChannel: UInt8 {
         switch self {
-        case .threeOctave, .twoOctave, .malletBars: return 0
-        case .drumKit:                              return 9
+        case .threeOctave, .twoOctave, .malletBars, .zither: return 0
+        case .drumKit:                                       return 9
+        }
+    }
+
+    /// Whether the on-screen keyboard should render via the generic
+    /// `ZoneBoardView` (positions purely from `normalizedFrame`, so it
+    /// handles gaps and non-row layouts) rather than `VirtualPianoView`
+    /// (which ignores `normalizedFrame` and always tiles keys edge-to-edge
+    /// by index — correct for piano/mallet's contiguous bars, wrong for
+    /// drums' spatial pads or zither's thin gapped strings).
+    var usesZoneBoard: Bool {
+        switch self {
+        case .threeOctave, .twoOctave, .malletBars: return false
+        case .drumKit, .zither:                     return true
         }
     }
 
@@ -212,6 +256,7 @@ enum KeyboardVariant: String, CaseIterable {
         case .twoOctave:   return "2"
         case .drumKit:     return "DRUM"
         case .malletBars:  return "MALLET"
+        case .zither:      return "ZITHER"
         }
     }
 
