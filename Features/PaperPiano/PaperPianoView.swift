@@ -671,6 +671,46 @@ private struct InstrumentPickerBar: View {
     }
 }
 
+// MARK: - Bundled Docs (Resources/docs/)
+
+/// Printable sheets and guides shipped in `Resources/docs/`.
+/// The `docs` folder is a folder reference in the Xcode target, so it is copied
+/// into the app bundle as `…/TapNote.app/docs/*.pdf`.
+enum BundledDoc: CaseIterable {
+    static let directory = "docs"
+
+    case keyboard2OctaveA3
+    case keyboard3Octave2xA3
+    case keyboardQR
+
+    var resourceName: String {
+        switch self {
+        case .keyboard2OctaveA3:   return "TapNote_Keyboard_2oct_A3"
+        case .keyboard3Octave2xA3: return "TapNote_Keyboard_3oct_2xA3"
+        case .keyboardQR:          return "TapNote_Keyboard_QR"
+        }
+    }
+
+    var shareTitle: String {
+        switch self {
+        case .keyboard2OctaveA3:   return "2-Octave Sheet — one A3 page"
+        case .keyboard3Octave2xA3: return "3-Octave Sheet — 2 pages, tape together"
+        case .keyboardQR:          return "Original QR Test Sheet"
+        }
+    }
+
+    /// Sheets offered in the Print/Share screen. `keyboardQR` is an older
+    /// detection-test artifact, not something to hand end users — omitted here.
+    static let printable: [BundledDoc] = [.keyboard2OctaveA3, .keyboard3Octave2xA3]
+
+    /// URL inside the app bundle, or nil if the file is missing from the target.
+    var url: URL? {
+        Bundle.main.url(forResource: resourceName, withExtension: "pdf", subdirectory: Self.directory)
+            // Fallback: flattened copy at bundle root (older project layout).
+            ?? Bundle.main.url(forResource: resourceName, withExtension: "pdf")
+    }
+}
+
 // MARK: - Print Instructions View
 
 struct PrintInstructionsView: View {
@@ -697,20 +737,16 @@ struct PrintInstructionsView: View {
                     }
                     .padding(.horizontal, 24)
                     VStack(spacing: 10) {
-                        if let url = Bundle.main.url(forResource: "TapNote_Keyboard_2oct_A3", withExtension: "pdf") {
-                            ShareLink(item: url) {
-                                Label("2-Octave Sheet — one A3 page", systemImage: "square.and.arrow.up.fill")
-                                    .font(.system(size: 16, weight: .semibold)).foregroundColor(.white)
-                                    .frame(maxWidth: .infinity).padding(.vertical, 14)
-                                    .background(Color.indigo).cornerRadius(14)
-                            }
-                        }
-                        if let url = Bundle.main.url(forResource: "TapNote_Keyboard_3oct_2xA3", withExtension: "pdf") {
-                            ShareLink(item: url) {
-                                Label("3-Octave Sheet — 2 pages, tape together", systemImage: "square.and.arrow.up")
-                                    .font(.system(size: 16, weight: .semibold)).foregroundColor(.indigo)
-                                    .frame(maxWidth: .infinity).padding(.vertical, 14)
-                                    .background(Color.indigo.opacity(0.12)).cornerRadius(14)
+                        ForEach(Array(BundledDoc.printable.enumerated()), id: \.offset) { index, doc in
+                            if let url = doc.url {
+                                ShareLink(item: url) {
+                                    Label(doc.shareTitle, systemImage: index == 0 ? "square.and.arrow.up.fill" : "square.and.arrow.up")
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .foregroundColor(index == 0 ? .white : .indigo)
+                                        .frame(maxWidth: .infinity).padding(.vertical, 14)
+                                        .background(index == 0 ? Color.indigo : Color.indigo.opacity(0.12))
+                                        .cornerRadius(14)
+                                }
                             }
                         }
                     }
