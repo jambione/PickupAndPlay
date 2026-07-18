@@ -115,6 +115,20 @@ struct PaperPianoKey: Identifiable {
         }
     }()
 
+    /// Mallet/bell family: a single chromatic octave (C4–C5, 13 bars), evenly
+    /// spaced with no black-key analog — reuses `makeLayout` with an empty
+    /// `blacks` array, so each bar gets a full-height rect exactly like a
+    /// piano white key. Real pitches (not GM-note-override zones like drums),
+    /// since xylophone/glockenspiel/vibraphone/marimba/tubular-bells/handbells
+    /// are all genuinely tuned instruments — only the timbre (InstrumentPreset)
+    /// changes, via the existing instrument picker, not the layout.
+    static let malletBarsLayout: [PaperPianoKey] = makeLayout(
+        whites: [
+            (.C,4),(.CSharp,4),(.D,4),(.DSharp,4),(.E,4),(.F,4),(.FSharp,4),
+            (.G,4),(.GSharp,4),(.A,4),(.ASharp,4),(.B,4),(.C,5)
+        ],
+        blacks: [])
+
     /// Legacy alias: the 3-octave layout (existing call sites; prefer variant APIs).
     static var layout: [PaperPianoKey] { threeOctaveLayout }
 
@@ -123,18 +137,21 @@ struct PaperPianoKey: Identifiable {
         case .threeOctave: return threeOctaveLayout
         case .twoOctave:   return twoOctaveLayout
         case .drumKit:     return drumKitLayout
+        case .malletBars:  return malletBarsLayout
         }
     }
 
     private static let byIDThree = Dictionary(uniqueKeysWithValues: threeOctaveLayout.map { ($0.id, $0) })
     private static let byIDTwo = Dictionary(uniqueKeysWithValues: twoOctaveLayout.map { ($0.id, $0) })
     private static let byIDDrum = Dictionary(uniqueKeysWithValues: drumKitLayout.map { ($0.id, $0) })
+    private static let byIDMallet = Dictionary(uniqueKeysWithValues: malletBarsLayout.map { ($0.id, $0) })
 
     static func byID(_ id: Int, variant: KeyboardVariant) -> PaperPianoKey? {
         switch variant {
         case .threeOctave: return byIDThree[id]
         case .twoOctave:   return byIDTwo[id]
         case .drumKit:     return byIDDrum[id]
+        case .malletBars:  return byIDMallet[id]
         }
     }
 }
@@ -157,30 +174,31 @@ enum InteractionModel {
 /// explicitly, `TAPNOTE:2:TL` = 2-octave), so the paper identifies itself and
 /// the app switches layouts automatically.
 enum KeyboardVariant: String, CaseIterable {
-    case threeOctave, twoOctave, drumKit
+    case threeOctave, twoOctave, drumKit, malletBars
 
     var displayName: String {
         switch self {
         case .threeOctave: return "3 octaves"
         case .twoOctave:   return "2 octaves"
         case .drumKit:     return "Drum Kit"
+        case .malletBars:  return "Mallet & Bells"
         }
     }
 
     var interactionModel: InteractionModel {
         switch self {
         case .threeOctave, .twoOctave: return .sustained
-        case .drumKit:                 return .struckOnce
+        case .drumKit, .malletBars:    return .struckOnce
         }
     }
 
     /// MIDI channel notes go out on. Independent of `interactionModel` —
-    /// future struck-but-melodic families (mallets, zither) still use channel
-    /// 0; only percussion needs the GM percussion channel (9).
+    /// mallets are struck but still melodic, so they stay on channel 0;
+    /// only percussion needs the GM percussion channel (9).
     var midiChannel: UInt8 {
         switch self {
-        case .threeOctave, .twoOctave: return 0
-        case .drumKit:                 return 9
+        case .threeOctave, .twoOctave, .malletBars: return 0
+        case .drumKit:                              return 9
         }
     }
 
@@ -193,6 +211,7 @@ enum KeyboardVariant: String, CaseIterable {
         case .threeOctave: return "3"
         case .twoOctave:   return "2"
         case .drumKit:     return "DRUM"
+        case .malletBars:  return "MALLET"
         }
     }
 

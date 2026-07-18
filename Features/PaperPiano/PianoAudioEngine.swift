@@ -8,6 +8,10 @@ import AudioToolbox
 /// SoundFont plus a tailored effects profile.
 enum InstrumentPreset: String, CaseIterable, Identifiable {
     case grandPiano, electricPiano, pipeOrgan, synthLead, strings
+    // Mallet/bell family (Paper Orchestra Phase 2) — same picker, no new UI;
+    // these just add more GM timbres to choose from regardless of which
+    // sheet (piano or mallet bars) is active.
+    case xylophone, glockenspiel, vibraphone, marimba, tubularBells, handbells
 
     var id: String { rawValue }
 
@@ -18,6 +22,12 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
         case .pipeOrgan:     return "Pipe Organ"
         case .synthLead:     return "Synth"
         case .strings:       return "Strings"
+        case .xylophone:     return "Xylophone"
+        case .glockenspiel:  return "Glockenspiel"
+        case .vibraphone:    return "Vibraphone"
+        case .marimba:       return "Marimba"
+        case .tubularBells:  return "Tubular Bells"
+        case .handbells:     return "Handbells"
         }
     }
 
@@ -28,6 +38,8 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
         case .pipeOrgan:     return "building.columns.fill"
         case .synthLead:     return "waveform"
         case .strings:       return "music.quarternote.3"
+        case .xylophone, .glockenspiel, .vibraphone, .marimba: return "music.note"
+        case .tubularBells, .handbells: return "bell.fill"
         }
     }
 
@@ -39,6 +51,15 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
         case .pipeOrgan:     return 19   // Church Organ
         case .synthLead:     return 81   // Lead 2 (sawtooth)
         case .strings:       return 48   // String Ensemble 1
+        case .xylophone:     return 13   // Xylophone
+        case .glockenspiel:  return 9    // Glockenspiel
+        case .vibraphone:    return 11   // Vibraphone
+        case .marimba:       return 12   // Marimba
+        case .tubularBells:  return 14   // Tubular Bells
+        // 112 "Tinker Bell" — closest bundled proxy for handbells; some
+        // SoundFont renderings of this GM slot lean more wind-chime than
+        // church-handbell. Listen-test before advertising it as the real thing.
+        case .handbells:     return 112
         }
     }
 
@@ -49,6 +70,12 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
         case .pipeOrgan:     return 35
         case .synthLead:     return 15
         case .strings:       return 40
+        case .xylophone:     return 20
+        case .glockenspiel:  return 28
+        case .vibraphone:    return 32
+        case .marimba:       return 22
+        case .tubularBells:  return 38
+        case .handbells:     return 34
         }
     }
 
@@ -60,15 +87,24 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
         case .pipeOrgan:     return (3.0, -1.0, -2.0)
         case .synthLead:     return (0.0, 1.0, 1.5)
         case .strings:       return (1.0, -1.0, 0.0)
+        case .xylophone:     return (-1.0, 0.5, 2.0)
+        case .glockenspiel:  return (-2.0, 0.5, 3.0)
+        case .vibraphone:    return (0.0, 0.0, 1.5)
+        case .marimba:       return (0.5, 0.0, 1.0)
+        case .tubularBells:  return (0.0, 0.0, 2.0)
+        case .handbells:     return (-1.0, 0.5, 2.5)
         }
     }
 
     /// Whether the sound sustains while held (organ/strings/synth) rather than
-    /// decaying naturally like a struck piano.
+    /// decaying naturally like a struck piano. Governs only the additive-synth
+    /// fallback's decay speed — the real sampled path always uses the
+    /// SoundFont's own envelope regardless of this flag.
     var sustains: Bool {
         switch self {
-        case .grandPiano, .electricPiano: return false
-        case .pipeOrgan, .synthLead, .strings: return true
+        case .grandPiano, .electricPiano, .xylophone, .marimba: return false
+        case .pipeOrgan, .synthLead, .strings,
+             .glockenspiel, .vibraphone, .tubularBells, .handbells: return true
         }
     }
 

@@ -35,6 +35,12 @@ struct Zone {
     /// its bottom-left) — NOT page-absolute; `SheetDefinition.origin` places it.
     let rect: CGRect
     var isAccent: Bool = false   // e.g. piano's "C" white keys, drum kick
+    /// True for a zone whose corner sits near a printed QR marker — its
+    /// label needs to be nudged clear of the QR's white backing. Only
+    /// matters when the zone is short enough that the QR backing (~50mm)
+    /// reaches into the default label position; piano keys are tall enough
+    /// (150mm) to never need this, shorter zones (mallet bars) do.
+    var isCornerAdjacent: Bool = false
 }
 
 struct SheetDefinition {
@@ -102,7 +108,14 @@ func drawZone(_ ctx: CGContext, zone: Zone, origin: CGPoint) {
         .foregroundColor: zone.isAccent ? NSColor.systemIndigo : NSColor(calibratedWhite: 0.35, alpha: 1)]
     let s = zone.label as NSString
     let sz = s.size(withAttributes: attrs)
-    s.draw(at: CGPoint(x: r.midX - sz.width / 2, y: r.minY + r.height * 0.12), withAttributes: attrs)
+    // Corner-adjacent zones (e.g. the first/last bar of a short row) can have
+    // a QR's white backing overlapping the default near-bottom label spot —
+    // center the label vertically instead, clear of both the near and far
+    // corner's backing.
+    let labelY = zone.isCornerAdjacent
+        ? r.midY - sz.height / 2
+        : r.minY + r.height * 0.12
+    s.draw(at: CGPoint(x: r.midX - sz.width / 2, y: labelY), withAttributes: attrs)
 }
 
 /// Draws the 4 corner QR markers around a zone group's bounding box.
@@ -216,11 +229,37 @@ let drumKit: SheetDefinition = {
         qrSizeMM: 42, groupSize: CGSize(width: groupW, height: groupH))
 }()
 
+/// Mallet/bell family: one chromatic octave, C4–C5, evenly-spaced bars with
+/// no black-key analog. Same 13 pitches as PaperPianoKey.malletBarsLayout —
+/// keep the two in sync by hand. Timbre (xylophone/glockenspiel/vibraphone/
+/// marimba/tubular bells/handbells) is chosen in-app via the instrument
+/// picker, not baked into the sheet.
+let malletBars: SheetDefinition = {
+    let labels = ["C4","C#4","D4","D#4","E4","F4","F#4","G4","G#4","A4","A#4","B4","C5"]
+    let ww: CGFloat = 23.5, wl: CGFloat = 90.0   // shorter bars than piano keys
+    var zones: [Zone] = []
+    for (i, label) in labels.enumerated() {
+        let r = CGRect(x: CGFloat(i) * ww, y: 0, width: ww, height: wl)
+        let isEnd = i == 0 || i == labels.count - 1
+        zones.append(Zone(label: label, rect: r, isAccent: label == "C4" || label == "C5",
+                          isCornerAdjacent: isEnd))
+    }
+    let w = CGFloat(labels.count) * ww
+    let margin: CGFloat = 40
+    return SheetDefinition(
+        name: "mallet", title: "TapNote · Mallet & Bells (1 Octave, C4–C5)",
+        subtitle: "Print on A3 at 100% scale. Pick a timbre in-app: Xylophone, Glockenspiel, Vibraphone, Marimba, Tubular Bells, or Handbells.",
+        qrToken: "MALLET", pageSize: CGSize(width: 420, height: 297),
+        origin: CGPoint(x: (420 - w) / 2, y: margin), zones: zones,
+        qrSizeMM: 42, groupSize: CGSize(width: w, height: wl))
+}()
+
 // MARK: - Registry
 
 let registry: [String: SheetDefinition] = [
     "2oct": twoOctavePiano,
     "drumkit": drumKit,
+    "mallet": malletBars,
 ]
 
 // MARK: - CLI

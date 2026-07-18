@@ -741,6 +741,7 @@ enum BundledDoc: CaseIterable {
     case keyboard3Octave2xA3
     case keyboardQR
     case drumKitA3
+    case malletBellsA3
 
     var resourceName: String {
         switch self {
@@ -748,6 +749,7 @@ enum BundledDoc: CaseIterable {
         case .keyboard3Octave2xA3: return "TapNote_Keyboard_3oct_2xA3"
         case .keyboardQR:          return "TapNote_Keyboard_QR"
         case .drumKitA3:           return "TapNote_DrumKit_A3"
+        case .malletBellsA3:      return "TapNote_MalletBells_A3"
         }
     }
 
@@ -757,12 +759,13 @@ enum BundledDoc: CaseIterable {
         case .keyboard3Octave2xA3: return "3-Octave Sheet — 2 pages, tape together"
         case .keyboardQR:          return "Original QR Test Sheet"
         case .drumKitA3:           return "Drum Kit Sheet — one A3 page"
+        case .malletBellsA3:      return "Mallet & Bells Sheet — one A3 page"
         }
     }
 
     /// Sheets offered in the Print/Share screen. `keyboardQR` is an older
     /// detection-test artifact, not something to hand end users — omitted here.
-    static let printable: [BundledDoc] = [.keyboard2OctaveA3, .keyboard3Octave2xA3, .drumKitA3]
+    static let printable: [BundledDoc] = [.keyboard2OctaveA3, .keyboard3Octave2xA3, .drumKitA3, .malletBellsA3]
 
     /// URL inside the app bundle, or nil if the file is missing from the target.
     var url: URL? {
