@@ -474,7 +474,8 @@ class CameraSessionManager: NSObject, ObservableObject {
             self.activeNotes.removeAll { $0.key.id == key.id }
             let note = ActiveNote(key: key, startTime: now, velocity: velocity)
             self.activeNotes.append(note)
-            PianoAudioEngine.shared.playNote(key: key, velocity: velocity)
+            PianoAudioEngine.shared.playNote(key: key, velocity: velocity,
+                                             channel: self.activeVariant.midiChannel)
 
             // Auto-release after 1.5 seconds (simulated key lift)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
@@ -670,7 +671,8 @@ class CameraSessionManager: NSObject, ObservableObject {
         if let last = lastCameraPress[key.id], now - last < repressInterval { return }
         lastCameraPress[key.id] = now
         pressedKeyIDs.insert(key.id)
-        PianoAudioEngine.shared.holdNote(key: key, velocity: velocity)
+        PianoAudioEngine.shared.holdNote(key: key, velocity: velocity,
+                                         channel: liveCalibration.variant.midiChannel)
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -692,7 +694,8 @@ class CameraSessionManager: NSObject, ObservableObject {
         let now = Date().timeIntervalSinceReferenceDate
         if let last = lastCameraPress[key.id], now - last < repressInterval { return }
         lastCameraPress[key.id] = now
-        PianoAudioEngine.shared.playPercussiveNote(key: key, velocity: velocity)
+        PianoAudioEngine.shared.playPercussiveNote(key: key, velocity: velocity,
+                                                    channel: liveCalibration.variant.midiChannel)
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -713,7 +716,7 @@ class CameraSessionManager: NSObject, ObservableObject {
     private func releaseKey(_ keyID: Int) {
         guard pressedKeyIDs.remove(keyID) != nil else { return }
         if let key = PaperPianoKey.byID(keyID, variant: currentVariantVQ) {
-            PianoAudioEngine.shared.stopNote(key: key)
+            PianoAudioEngine.shared.stopNote(key: key, channel: currentVariantVQ.midiChannel)
         }
         DispatchQueue.main.async { [weak self] in
             self?.activeNotes.removeAll { $0.key.id == keyID }

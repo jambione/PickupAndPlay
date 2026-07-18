@@ -187,10 +187,40 @@ let threeOctavePianoNote = "3-octave piano is printed across 2 tiled A3 pages �
     "not reproduced here since Phase 0 only needed the tool to exist, not to reprint " +
     "already-correct, already-printed sheets."
 
+/// 5-pad starter drum kit. Zone fractions here MUST match
+/// PaperPianoKey.drumKitLayout in Features/PaperPiano/PaperPianoModel.swift —
+/// keep the two in sync by hand (both are small/rare-to-change enough that a
+/// shared data file wasn't worth the indirection yet).
+let drumKit: SheetDefinition = {
+    let groupW: CGFloat = 340, groupH: CGFloat = 220   // mm — bigger than piano keys; hand-sized pads
+    // (label, normalized rect — same fractions as PaperPianoKey.drumKitLayout)
+    let pads: [(String, CGRect)] = [
+        ("Kick",      CGRect(x: 0.28, y: 0.03, width: 0.34, height: 0.28)),
+        ("Hi-Hat",    CGRect(x: 0.08, y: 0.35, width: 0.28, height: 0.28)),
+        ("Snare",     CGRect(x: 0.42, y: 0.35, width: 0.28, height: 0.28)),
+        ("Crash",     CGRect(x: 0.03, y: 0.68, width: 0.30, height: 0.29)),
+        ("Floor Tom", CGRect(x: 0.67, y: 0.68, width: 0.30, height: 0.29)),
+    ]
+    let zones = pads.map { label, norm in
+        Zone(label: label,
+            rect: CGRect(x: norm.minX * groupW, y: norm.minY * groupH,
+                        width: norm.width * groupW, height: norm.height * groupH),
+            isAccent: label == "Kick")
+    }
+    let margin: CGFloat = 40
+    return SheetDefinition(
+        name: "drumkit", title: "TapNote · 5-Pad Starter Drum Kit",
+        subtitle: "Print on A3 at 100% scale. Lay flat, keep all 4 QR squares visible — tap a pad to play it.",
+        qrToken: "DRUM", pageSize: CGSize(width: 420, height: 297),
+        origin: CGPoint(x: (420 - groupW) / 2, y: margin), zones: zones,
+        qrSizeMM: 42, groupSize: CGSize(width: groupW, height: groupH))
+}()
+
 // MARK: - Registry
 
 let registry: [String: SheetDefinition] = [
     "2oct": twoOctavePiano,
+    "drumkit": drumKit,
 ]
 
 // MARK: - CLI

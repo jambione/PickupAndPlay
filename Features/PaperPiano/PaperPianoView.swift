@@ -70,23 +70,39 @@ struct PaperPianoView: View {
             .background(Color.black)
 
             if isPlaying {
-                InstrumentPickerBar()
+                if camera.activeVariant == .drumKit {
+                    DrumKitPickerBar()
+                } else {
+                    InstrumentPickerBar()
+                }
                 keyboardHandleBar
                 if showKeyboard {
                     ZStack {
                         Color(white: 0.07)
-                        VirtualPianoView(activeNotes: camera.activeNotes,
+                        if camera.activeVariant == .drumKit {
+                            ZoneBoardView(activeNotes: camera.activeNotes,
                                          variant: camera.activeVariant) { key in
-                            camera.triggerKey(key, velocity: 0.85)
-                        }
-                        .id(camera.activeVariant)
-                        .padding(.horizontal, 4).padding(.vertical, 6)
-                        GeometryReader { geo in
-                            NoteRippleOverlay(activeNotes: camera.activeNotes,
-                                              containerSize: CGSize(width: geo.size.width, height: keyboardHeight),
-                                              variant: camera.activeVariant)
+                                camera.triggerKey(key, velocity: 0.85)
+                            }
+                            .padding(.horizontal, 4).padding(.vertical, 6)
+                            GeometryReader { geo in
+                                ZoneRippleOverlay(activeNotes: camera.activeNotes,
+                                                  containerSize: CGSize(width: geo.size.width, height: keyboardHeight))
+                            }
+                        } else {
+                            VirtualPianoView(activeNotes: camera.activeNotes,
+                                             variant: camera.activeVariant) { key in
+                                camera.triggerKey(key, velocity: 0.85)
+                            }
+                            .padding(.horizontal, 4).padding(.vertical, 6)
+                            GeometryReader { geo in
+                                NoteRippleOverlay(activeNotes: camera.activeNotes,
+                                                  containerSize: CGSize(width: geo.size.width, height: keyboardHeight),
+                                                  variant: camera.activeVariant)
+                            }
                         }
                     }
+                    .id(camera.activeVariant)
                     .frame(height: keyboardHeight)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -671,6 +687,48 @@ private struct InstrumentPickerBar: View {
     }
 }
 
+// MARK: - Drum Kit Picker
+
+/// Horizontal drum-kit chips, mirroring `InstrumentPickerBar` — shown instead
+/// of it while the drum kit sheet is active.
+private struct DrumKitPickerBar: View {
+    @AppStorage("tapnote.drumkit") private var kitRaw = DrumKitPreset.standardKit.rawValue
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(DrumKitPreset.allCases) { kit in
+                    let selected = kit.rawValue == kitRaw
+                    Button {
+                        guard !selected else { return }
+                        kitRaw = kit.rawValue
+                        Haptics.selection()
+                        PianoAudioEngine.shared.loadDrumKit(kit)
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: kit.sfSymbol)
+                                .font(.system(size: 11, weight: .semibold))
+                            Text(kit.displayName)
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        }
+                        .foregroundColor(selected ? .white : .white.opacity(0.65))
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(selected ? Color.indigo : Color.white.opacity(0.08), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+        }
+        .background(Color(white: 0.1))
+        .onAppear {
+            if let kit = DrumKitPreset(rawValue: kitRaw) {
+                PianoAudioEngine.shared.loadDrumKit(kit)
+            }
+        }
+    }
+}
+
 // MARK: - Bundled Docs (Resources/docs/)
 
 /// Printable sheets and guides shipped in `Resources/docs/`.
@@ -682,12 +740,14 @@ enum BundledDoc: CaseIterable {
     case keyboard2OctaveA3
     case keyboard3Octave2xA3
     case keyboardQR
+    case drumKitA3
 
     var resourceName: String {
         switch self {
         case .keyboard2OctaveA3:   return "TapNote_Keyboard_2oct_A3"
         case .keyboard3Octave2xA3: return "TapNote_Keyboard_3oct_2xA3"
         case .keyboardQR:          return "TapNote_Keyboard_QR"
+        case .drumKitA3:           return "TapNote_DrumKit_A3"
         }
     }
 
@@ -696,12 +756,13 @@ enum BundledDoc: CaseIterable {
         case .keyboard2OctaveA3:   return "2-Octave Sheet — one A3 page"
         case .keyboard3Octave2xA3: return "3-Octave Sheet — 2 pages, tape together"
         case .keyboardQR:          return "Original QR Test Sheet"
+        case .drumKitA3:           return "Drum Kit Sheet — one A3 page"
         }
     }
 
     /// Sheets offered in the Print/Share screen. `keyboardQR` is an older
     /// detection-test artifact, not something to hand end users — omitted here.
-    static let printable: [BundledDoc] = [.keyboard2OctaveA3, .keyboard3Octave2xA3]
+    static let printable: [BundledDoc] = [.keyboard2OctaveA3, .keyboard3Octave2xA3, .drumKitA3]
 
     /// URL inside the app bundle, or nil if the file is missing from the target.
     var url: URL? {

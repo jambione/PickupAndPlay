@@ -91,6 +91,30 @@ struct PaperPianoKey: Identifiable {
             (.CSharp,4,7), (.DSharp,4,8), (.FSharp,4,10),(.GSharp,4,11),(.ASharp,4,12),
         ])
 
+    /// 5-pad starter drum kit: Kick (front-center), Snare + Closed Hi-Hat
+    /// (mid row), Crash + Floor Tom (back row) — a spatial arrangement, not
+    /// an evenly-spaced row like piano/mallet zones. `note`/`octave` are
+    /// unused placeholders (audio and display both go through the
+    /// `midiNoteOverride`/`displayLabel` fields); GM drum-map note numbers.
+    static let drumKitLayout: [PaperPianoKey] = {
+        // (label, GM drum-map note, normalized rect)
+        let pads: [(String, UInt8, CGRect)] = [
+            ("Kick",      36, CGRect(x: 0.28, y: 0.03, width: 0.34, height: 0.28)),
+            ("Hi-Hat",    42, CGRect(x: 0.08, y: 0.35, width: 0.28, height: 0.28)),
+            ("Snare",     38, CGRect(x: 0.42, y: 0.35, width: 0.28, height: 0.28)),
+            ("Crash",     49, CGRect(x: 0.03, y: 0.68, width: 0.30, height: 0.29)),
+            ("Floor Tom", 41, CGRect(x: 0.67, y: 0.68, width: 0.30, height: 0.29)),
+        ]
+        return pads.enumerated().map { i, pad in
+            var k = PaperPianoKey(id: i, note: .C, octave: 4,
+                                  isBlack: false, whiteKeyIndex: i, blackKeyOffset: 0)
+            k.normalizedFrame = pad.2
+            k.midiNoteOverride = pad.1
+            k.displayLabel = pad.0
+            return k
+        }
+    }()
+
     /// Legacy alias: the 3-octave layout (existing call sites; prefer variant APIs).
     static var layout: [PaperPianoKey] { threeOctaveLayout }
 
@@ -98,16 +122,19 @@ struct PaperPianoKey: Identifiable {
         switch variant {
         case .threeOctave: return threeOctaveLayout
         case .twoOctave:   return twoOctaveLayout
+        case .drumKit:     return drumKitLayout
         }
     }
 
     private static let byIDThree = Dictionary(uniqueKeysWithValues: threeOctaveLayout.map { ($0.id, $0) })
     private static let byIDTwo = Dictionary(uniqueKeysWithValues: twoOctaveLayout.map { ($0.id, $0) })
+    private static let byIDDrum = Dictionary(uniqueKeysWithValues: drumKitLayout.map { ($0.id, $0) })
 
     static func byID(_ id: Int, variant: KeyboardVariant) -> PaperPianoKey? {
         switch variant {
         case .threeOctave: return byIDThree[id]
         case .twoOctave:   return byIDTwo[id]
+        case .drumKit:     return byIDDrum[id]
         }
     }
 }
@@ -130,18 +157,30 @@ enum InteractionModel {
 /// explicitly, `TAPNOTE:2:TL` = 2-octave), so the paper identifies itself and
 /// the app switches layouts automatically.
 enum KeyboardVariant: String, CaseIterable {
-    case threeOctave, twoOctave
+    case threeOctave, twoOctave, drumKit
 
     var displayName: String {
         switch self {
         case .threeOctave: return "3 octaves"
         case .twoOctave:   return "2 octaves"
+        case .drumKit:     return "Drum Kit"
         }
     }
 
     var interactionModel: InteractionModel {
         switch self {
         case .threeOctave, .twoOctave: return .sustained
+        case .drumKit:                 return .struckOnce
+        }
+    }
+
+    /// MIDI channel notes go out on. Independent of `interactionModel` —
+    /// future struck-but-melodic families (mallets, zither) still use channel
+    /// 0; only percussion needs the GM percussion channel (9).
+    var midiChannel: UInt8 {
+        switch self {
+        case .threeOctave, .twoOctave: return 0
+        case .drumKit:                 return 9
         }
     }
 
@@ -153,6 +192,7 @@ enum KeyboardVariant: String, CaseIterable {
         switch self {
         case .threeOctave: return "3"
         case .twoOctave:   return "2"
+        case .drumKit:     return "DRUM"
         }
     }
 

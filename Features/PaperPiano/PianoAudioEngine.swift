@@ -78,6 +78,42 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Drum Kit Presets
+
+/// Percussion kits from the bundled SoundFont's GM percussion bank (bank 120).
+/// Selected via a program change on MIDI channel 9 (the GM percussion
+/// channel) — not a bank-select — confirmed by direct testing to route there
+/// automatically on this synth with no other plumbing needed.
+enum DrumKitPreset: String, CaseIterable, Identifiable {
+    case standardKit, roomKit, jazzKit, electronicKit
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .standardKit:   return "Standard Kit"
+        case .roomKit:       return "Room Kit"
+        case .jazzKit:       return "Jazz Kit"
+        case .electronicKit: return "Electronic Kit"
+        }
+    }
+
+    var sfSymbol: String { "circle.grid.3x3.fill" }
+
+    /// Program number within bank 120 (percussion), per the bundled SoundFont.
+    var gmProgram: UInt8 {
+        switch self {
+        case .standardKit:   return 0   // "Standard 1 Kit"
+        case .roomKit:       return 8   // "Room Kit"
+        case .jazzKit:       return 32  // "Jazz Kit"
+        case .electronicKit: return 24  // "Electronic Kit"
+        }
+    }
+}
+
+/// The MIDI channel General MIDI reserves for percussion (index 9, "channel 10").
+private let percussionChannel: UInt8 = 9
+
 // MARK: - Piano Audio Engine
 
 /// Singleton audio engine that produces rich instrument tones.
@@ -121,6 +157,9 @@ class PianoAudioEngine {
 
     /// The active instrument (audioQueue-only; UI keeps its own selection state).
     private(set) var currentPreset: InstrumentPreset = .grandPiano
+
+    /// The active drum kit (audioQueue-only; UI keeps its own selection state).
+    private(set) var currentDrumKit: DrumKitPreset = .standardKit
 
     // MARK: - Init
 
@@ -170,6 +209,7 @@ class PianoAudioEngine {
             try engine.start()
             if usingSampler { preloadPrograms() }
             loadInstrument(.grandPiano)
+            loadDrumKit(.standardKit)
         } catch {
             print("Audio engine start error: \(error)")
         }
@@ -223,6 +263,10 @@ class PianoAudioEngine {
                 MusicDeviceMIDIEvent(self.synthUnit.audioUnit,
                                      0xC0, UInt32(preset.gmProgram), 0, 0)
             }
+            for kit in DrumKitPreset.allCases {
+                MusicDeviceMIDIEvent(self.synthUnit.audioUnit,
+                                     0xC0 | UInt32(percussionChannel), UInt32(kit.gmProgram), 0, 0)
+            }
             enabled = 0
             AudioUnitSetProperty(self.synthUnit.audioUnit, propID, scope, 0,
                                  &enabled, UInt32(MemoryLayout<UInt32>.size))
@@ -253,6 +297,23 @@ class PianoAudioEngine {
             self.soundingNotes.removeAll()
             self.synthUnit.sendProgramChange(preset.gmProgram, onChannel: 0)
             print("🎹 Instrument: \(preset.displayName) (program \(preset.gmProgram))")
+        }
+    }
+
+    /// Switches the drum kit with a program change on the percussion channel
+    /// only — deliberately scoped to channel 9 so switching kits doesn't cut
+    /// off a currently-sustaining melodic note on channel 0.
+    func loadDrumKit(_ preset: DrumKitPreset) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.currentDrumKit = preset
+            guard self.usingSampler else { return }
+            for sounding in self.soundingNotes where sounding.channel == percussionChannel {
+                self.synthUnit.stopNote(sounding.note, onChannel: percussionChannel)
+            }
+            self.soundingNotes = self.soundingNotes.filter { $0.channel != percussionChannel }
+            self.synthUnit.sendProgramChange(preset.gmProgram, onChannel: percussionChannel)
+            print("🥁 Drum kit: \(preset.displayName) (program \(preset.gmProgram))")
         }
     }
 
