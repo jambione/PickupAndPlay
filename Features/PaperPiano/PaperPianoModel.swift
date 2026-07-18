@@ -16,7 +16,19 @@ struct PaperPianoKey: Identifiable {
     // Set after calibration
     var normalizedFrame: CGRect = .zero
 
-    var displayName: String { "\(note.rawValue)\(octave)" }
+    /// MIDI note number to send instead of the note/octave-derived default.
+    /// Non-piano zones (drum pads, etc.) aren't really musical pitches — a
+    /// kick drum has no "octave" — so this lets a zone address any MIDI note
+    /// (e.g. the GM drum map) without distorting `note`/`octave`.
+    var midiNoteOverride: UInt8? = nil
+
+    /// Label to show instead of `note`+`octave` (e.g. "Kick", "Snare") for
+    /// zones that aren't musical notes. `note`/`octave` still need placeholder
+    /// values in that case (id/hashing/frequency don't depend on them being
+    /// musically meaningful).
+    var displayLabel: String? = nil
+
+    var displayName: String { displayLabel ?? "\(note.rawValue)\(octave)" }
     var frequency: Double {
         let semitones = Double(note.semitoneOffset) + Double((octave - 4) * 12)
         return 440.0 * pow(2.0, semitones / 12.0)
@@ -100,11 +112,23 @@ struct PaperPianoKey: Identifiable {
     }
 }
 
+// MARK: - Interaction Model
+
+/// How a zone responds to a fingertip. Piano/organ-style instruments sustain
+/// for as long as the finger occupies the zone; struck/plucked instruments
+/// (drums, mallets, zither) fire once on arrival and decay on their own —
+/// tying note-off to the finger leaving would routinely clip their tails.
+enum InteractionModel {
+    case sustained
+    case struckOnce
+}
+
 // MARK: - Keyboard Variant
 
 /// Which printed sheet is in front of the camera. Encoded in the corner QR
-/// payloads (`TAPNOTE:TL` = 3-octave legacy, `TAPNOTE:2:TL` = 2-octave), so the
-/// paper identifies itself and the app switches layouts automatically.
+/// payloads (`TAPNOTE:TL` = 3-octave legacy bare form, `TAPNOTE:3:TL` = same
+/// explicitly, `TAPNOTE:2:TL` = 2-octave), so the paper identifies itself and
+/// the app switches layouts automatically.
 enum KeyboardVariant: String, CaseIterable {
     case threeOctave, twoOctave
 
@@ -113,6 +137,40 @@ enum KeyboardVariant: String, CaseIterable {
         case .threeOctave: return "3 octaves"
         case .twoOctave:   return "2 octaves"
         }
+    }
+
+    var interactionModel: InteractionModel {
+        switch self {
+        case .threeOctave, .twoOctave: return .sustained
+        }
+    }
+
+    /// The QR sub-prefix identifying this sheet (the part of the payload
+    /// after "TAPNOTE:", before its own trailing ":"). `threeOctave`'s token
+    /// is also reachable via the bare legacy form with no token at all —
+    /// sheets printed before this scheme existed must keep working.
+    var qrToken: String {
+        switch self {
+        case .threeOctave: return "3"
+        case .twoOctave:   return "2"
+        }
+    }
+
+    /// Token → variant, built once from `qrToken` so new sheets are additive
+    /// data (a new case + token), not more `if`/`else` branches.
+    private static let byToken: [String: KeyboardVariant] = Dictionary(
+        uniqueKeysWithValues: allCases.map { ($0.qrToken, $0) })
+
+    /// Parses a QR payload's post-"TAPNOTE:" suffix into (variant, corner-name
+    /// suffix), trying the longest known token first (so no future token can
+    /// be misread as a prefix of another). No token match at all → the legacy
+    /// bare-prefix default, `threeOctave`.
+    static func parseToken(from suffix: String) -> (variant: KeyboardVariant, rest: String) {
+        let tokensLongestFirst = byToken.keys.sorted { $0.count > $1.count }
+        for token in tokensLongestFirst where suffix.hasPrefix(token + ":") {
+            return (byToken[token]!, String(suffix.dropFirst(token.count + 1)))
+        }
+        return (.threeOctave, suffix)
     }
 }
 
@@ -241,8 +299,11 @@ struct KeyboardCalibration {
         return x
     }
 
-    /// Returns which piano key (if any) a preview-space touch point lands on,
-    /// against the active sheet variant's layout.
+    /// Returns which zone (if any) a preview-space touch point lands on,
+    /// against the active sheet variant's layout. Generic across instrument
+    /// families: black-key-first ordering only matters for piano-shaped
+    /// layouts (where they visually overlap); for a layout with no black
+    /// zones the first loop simply matches nothing.
     func key(at previewPt: CGPoint, previewSize: CGSize) -> PaperPianoKey? {
         guard let norm = normalizedPoint(from: previewPt, previewSize: previewSize) else { return nil }
         let layout = PaperPianoKey.layout(for: variant)

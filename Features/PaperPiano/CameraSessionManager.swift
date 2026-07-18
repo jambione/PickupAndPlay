@@ -640,7 +640,11 @@ class CameraSessionManager: NSObject, ObservableObject {
         if let old = finger.pressedKeyID { releaseKey(old) }
         finger.pressedKeyID = nil
         if let key, key.id == finger.candidateKeyID {
-            pressKey(key, velocity: arrivalVelocity(of: finger))
+            let velocity = arrivalVelocity(of: finger)
+            switch liveCalibration.variant.interactionModel {
+            case .sustained: pressKey(key, velocity: velocity)
+            case .struckOnce: strikeKey(key, velocity: velocity)
+            }
             finger.pressedKeyID = key.id
         }
     }
@@ -675,6 +679,33 @@ class CameraSessionManager: NSObject, ObservableObject {
             #if !targetEnvironment(macCatalyst)
             self.noteHaptic.impactOccurred()
             #endif
+        }
+    }
+
+    /// Note-on for a struck zone (drum pad, mallet bar, plucked string): fires
+    /// once on arrival and is expected to decay on its own, unlike a sustained
+    /// piano/organ press. Deliberately does NOT add to `pressedKeyIDs` — that's
+    /// what makes the `releaseKey` call in `evaluatePress` (fired when the
+    /// finger later moves off or lifts) a safe no-op here instead of stopping
+    /// a note that was never being held in the first place.
+    private func strikeKey(_ key: PaperPianoKey, velocity: Float) {
+        let now = Date().timeIntervalSinceReferenceDate
+        if let last = lastCameraPress[key.id], now - last < repressInterval { return }
+        lastCameraPress[key.id] = now
+        PianoAudioEngine.shared.playPercussiveNote(key: key, velocity: velocity)
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.activeNotes.removeAll { $0.key.id == key.id }
+            self.activeNotes.append(ActiveNote(key: key, startTime: Date(), velocity: velocity))
+            #if !targetEnvironment(macCatalyst)
+            self.noteHaptic.impactOccurred()
+            #endif
+            // No sustain to track — clear the UI highlight after a quick flash
+            // rather than waiting for a release that will never come.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.activeNotes.removeAll { $0.key.id == key.id }
+            }
         }
     }
 
@@ -714,10 +745,8 @@ class CameraSessionManager: NSObject, ObservableObject {
         for obs in results {
             guard let payload = obs.payloadStringValue,
                   payload.hasPrefix("TAPNOTE:") else { continue }
-            var suffix = String(payload.dropFirst("TAPNOTE:".count))
-            var variant: KeyboardVariant = .threeOctave
-            if suffix.hasPrefix("2:") { variant = .twoOctave; suffix = String(suffix.dropFirst(2)) }
-            else if suffix.hasPrefix("3:") { suffix = String(suffix.dropFirst(2)) }
+            let rawSuffix = String(payload.dropFirst("TAPNOTE:".count))
+            let (variant, suffix) = KeyboardVariant.parseToken(from: rawSuffix)
             // boundingBox is normalized with a bottom-left origin — flip Y to match
             // the fingertip coordinate space.
             let center = CGPoint(x: obs.boundingBox.midX, y: 1 - obs.boundingBox.midY)

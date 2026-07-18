@@ -30,6 +30,7 @@
 		B021 /* VirtualPianoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A021 /* VirtualPianoView.swift */; };
 		B022 /* GeneralUserGS.sf2 in Resources */ = {isa = PBXBuildFile; fileRef = A022 /* GeneralUserGS.sf2 */; };
 		B023 /* docs in Resources */ = {isa = PBXBuildFile; fileRef = A023 /* docs */; };
+		B024 /* ZoneBoardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A024 /* ZoneBoardView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -56,6 +57,7 @@
 		A021 /* VirtualPianoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VirtualPianoView.swift; path = Features/PaperPiano/VirtualPianoView.swift; sourceTree = "<group>"; };
 		A022 /* GeneralUserGS.sf2 */ = {isa = PBXFileReference; lastKnownFileType = file; name = GeneralUserGS.sf2; path = Resources/GeneralUserGS.sf2; sourceTree = "<group>"; };
 		A023 /* docs */ = {isa = PBXFileReference; lastKnownFileType = folder; name = docs; path = Resources/docs; sourceTree = "<group>"; };
+		A024 /* ZoneBoardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ZoneBoardView.swift; path = Features/PaperPiano/ZoneBoardView.swift; sourceTree = "<group>"; };
 		A099 /* TapNote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TapNote.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -114,6 +116,7 @@
 				A019 /* PaperPianoView.swift */,
 				A020 /* PianoAudioEngine.swift */,
 				A021 /* VirtualPianoView.swift */,
+				A024 /* ZoneBoardView.swift */,
 			);
 			name = Features;
 			sourceTree = "<group>";
@@ -231,6 +234,7 @@
 				B019 /* PaperPianoView.swift in Sources */,
 				B020 /* PianoAudioEngine.swift in Sources */,
 				B021 /* VirtualPianoView.swift in Sources */,
+				B024 /* ZoneBoardView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

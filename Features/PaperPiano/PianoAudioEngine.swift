@@ -110,8 +110,14 @@ class PianoAudioEngine {
     private var usingSampler = false
     private let audioQueue = DispatchQueue(label: "com.tapnote.audio", qos: .userInteractive)
 
-    /// MIDI notes currently sounding (audioQueue-only) — silenced on instrument switch.
-    private var soundingNotes: Set<UInt8> = []
+    /// A sounding MIDI note is only unique per (note, channel) — GM drum-map
+    /// note numbers (channel 9/percussion) overlap the ordinary melodic note
+    /// range (channel 0), so tracking bare note numbers would let a struck
+    /// drum note collide with an unrelated melodic one of the same number.
+    private struct SoundingNote: Hashable { let note: UInt8; let channel: UInt8 }
+
+    /// Notes currently sounding (audioQueue-only) — silenced on instrument switch.
+    private var soundingNotes: Set<SoundingNote> = []
 
     /// The active instrument (audioQueue-only; UI keeps its own selection state).
     private(set) var currentPreset: InstrumentPreset = .grandPiano
@@ -239,8 +245,11 @@ class PianoAudioEngine {
             }
 
             guard self.usingSampler else { return }
-            // Silence held notes so nothing hangs across the program change.
-            for note in self.soundingNotes { self.synthUnit.stopNote(note, onChannel: 0) }
+            // Silence held notes (on whichever channel they're actually on) so
+            // nothing hangs across the program change.
+            for sounding in self.soundingNotes {
+                self.synthUnit.stopNote(sounding.note, onChannel: sounding.channel)
+            }
             self.soundingNotes.removeAll()
             self.synthUnit.sendProgramChange(preset.gmProgram, onChannel: 0)
             print("🎹 Instrument: \(preset.displayName) (program \(preset.gmProgram))")
@@ -261,25 +270,26 @@ class PianoAudioEngine {
 
     // MARK: - Play Note
 
-    func playNote(key: PaperPianoKey, velocity: Float = 0.8) {
+    func playNote(key: PaperPianoKey, velocity: Float = 0.8, channel: UInt8 = 0) {
         audioQueue.async { [weak self] in
             guard let self else { return }
             let midiNote = self.midiNoteNumber(for: key)
             let midiVelocity = UInt8(min(127, Int(velocity * 127)))
+            let sounding = SoundingNote(note: midiNote, channel: channel)
 
             if self.usingSampler {
                 // Re-striking a sounding note without a note-off stacks voices —
                 // always release first.
-                if self.soundingNotes.contains(midiNote) {
-                    self.synthUnit.stopNote(midiNote, onChannel: 0)
+                if self.soundingNotes.contains(sounding) {
+                    self.synthUnit.stopNote(midiNote, onChannel: channel)
                 }
-                self.synthUnit.startNote(midiNote, withVelocity: midiVelocity, onChannel: 0)
-                self.soundingNotes.insert(midiNote)
+                self.synthUnit.startNote(midiNote, withVelocity: midiVelocity, onChannel: channel)
+                self.soundingNotes.insert(sounding)
 
                 // Schedule note-off after 1.2 seconds
                 self.audioQueue.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-                    self?.synthUnit.stopNote(midiNote, onChannel: 0)
-                    self?.soundingNotes.remove(midiNote)
+                    self?.synthUnit.stopNote(midiNote, onChannel: channel)
+                    self?.soundingNotes.remove(sounding)
                 }
             } else {
                 self.playSynthNote(key: key, velocity: velocity)
@@ -290,17 +300,46 @@ class PianoAudioEngine {
     /// Note-on for a sustained press. Unlike `playNote` there is no scheduled
     /// note-off — the note rings until `stopNote(key:)` is called (finger lift).
     /// The synthesis fallback can't be sustained, so it plays its usual decay.
-    func holdNote(key: PaperPianoKey, velocity: Float = 0.8) {
+    func holdNote(key: PaperPianoKey, velocity: Float = 0.8, channel: UInt8 = 0) {
         audioQueue.async { [weak self] in
             guard let self else { return }
             if self.usingSampler {
                 let midiNote = self.midiNoteNumber(for: key)
                 let midiVelocity = UInt8(min(127, Int(velocity * 127)))
-                if self.soundingNotes.contains(midiNote) {
-                    self.synthUnit.stopNote(midiNote, onChannel: 0)
+                let sounding = SoundingNote(note: midiNote, channel: channel)
+                if self.soundingNotes.contains(sounding) {
+                    self.synthUnit.stopNote(midiNote, onChannel: channel)
                 }
-                self.synthUnit.startNote(midiNote, withVelocity: midiVelocity, onChannel: 0)
-                self.soundingNotes.insert(midiNote)
+                self.synthUnit.startNote(midiNote, withVelocity: midiVelocity, onChannel: channel)
+                self.soundingNotes.insert(sounding)
+            } else {
+                self.playSynthNote(key: key, velocity: velocity)
+            }
+        }
+    }
+
+    /// Fire-and-forget note for struck/percussive zones (drums, mallets, plucked
+    /// strings): plays once and lets the SoundFont's own sample decay handle the
+    /// tail, with a longer safety auto-note-off than `playNote`'s 1.2s since
+    /// cymbal/bell/resonant tails can ring considerably longer than a piano note.
+    func playPercussiveNote(key: PaperPianoKey, velocity: Float = 0.8, channel: UInt8 = 0) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            let midiNote = self.midiNoteNumber(for: key)
+            let midiVelocity = UInt8(min(127, Int(velocity * 127)))
+            let sounding = SoundingNote(note: midiNote, channel: channel)
+
+            if self.usingSampler {
+                if self.soundingNotes.contains(sounding) {
+                    self.synthUnit.stopNote(midiNote, onChannel: channel)
+                }
+                self.synthUnit.startNote(midiNote, withVelocity: midiVelocity, onChannel: channel)
+                self.soundingNotes.insert(sounding)
+
+                self.audioQueue.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+                    self?.synthUnit.stopNote(midiNote, onChannel: channel)
+                    self?.soundingNotes.remove(sounding)
+                }
             } else {
                 self.playSynthNote(key: key, velocity: velocity)
             }
@@ -319,13 +358,13 @@ class PianoAudioEngine {
         }
     }
 
-    func stopNote(key: PaperPianoKey) {
+    func stopNote(key: PaperPianoKey, channel: UInt8 = 0) {
         audioQueue.async { [weak self] in
             guard let self else { return }
             let midiNote = self.midiNoteNumber(for: key)
             if self.usingSampler {
-                self.synthUnit.stopNote(midiNote, onChannel: 0)
-                self.soundingNotes.remove(midiNote)
+                self.synthUnit.stopNote(midiNote, onChannel: channel)
+                self.soundingNotes.remove(SoundingNote(note: midiNote, channel: channel))
             }
         }
     }
@@ -333,6 +372,9 @@ class PianoAudioEngine {
     // MARK: - MIDI Note Number
 
     private func midiNoteNumber(for key: PaperPianoKey) -> UInt8 {
+        // Non-piano zones (e.g. GM drum-map pads) address a specific MIDI note
+        // directly — they aren't a musical pitch derived from note/octave.
+        if let override = key.midiNoteOverride { return override }
         // MIDI: C4 = 60, each semitone = +1
         let base = (key.octave + 1) * 12
         let offset: Int
