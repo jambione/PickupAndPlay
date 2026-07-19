@@ -14,11 +14,44 @@ and `tapnote_capture.mov` off the device.
   knobs (`liftReleaseSpeed`, `fastTapSpeed`) can still be refined from log data
   if edge cases surface, but no longer blocking.
 
+## Real bugs, not yet fixed (continued below too)
+
+0. **Near-camera parallax drift (CONFIRMED by user, 2026-07-19)** — tracking
+   accuracy degrades as the hand nears the camera. Far from the lens the dot
+   sits on the fingertip and the correct key fires; up close the dot drifts off
+   the finger onto a neighbouring key. **Cause is geometric, not detection:** the
+   fingertip rides a few mm ABOVE the paper, but the homography maps the tracked
+   2D point as if it lay ON the paper plane. An elevated point projects into the
+   image displaced (along the camera's line of sight) from the paper spot
+   directly beneath it, and that displacement grows with (a) fingertip height,
+   (b) camera obliqueness, and (c) proximity — the same physical height subtends
+   a bigger angle up close, so the key-space error balloons near the lens.
+   Distinct from #8 (confidence collapse): here the point is tracked
+   *confidently* but is geometrically offset. Also amplifies #5 (a resting hand
+   near the lens reads even further off its true key).
+
+   **Fix = software parallax correction (user ruled out a top-down rig as
+   unrealistic, 2026-07-19).** Key math: the mapped-point error is
+   `error = (h/cz)·(q − c_xy)` where q = naive homography-mapped paper point,
+   c_xy = camera's ground-projection in paper coords, cz = camera height, h =
+   fingertip height. So the corrected contact is
+   `f = q − (h/cz)·(q − c_xy)` — i.e. shift the mapped point toward the camera's
+   ground projection by a fraction of its distance. Because this is **affine in
+   q**, an affine correction can cancel it exactly. Two ways to get the
+   coefficients: (a) derive c_xy/cz from the 4 QR corners + the iOS camera
+   intrinsic matrix (`cameraIntrinsicMatrixDeliveryEnabled`) via homography
+   decomposition, with h ≈ 10–15 mm as the one tunable; (b) fit the affine
+   empirically from FrameRecorder+PressLog drift samples. Plan: measure the real
+   drift field first (recorder already captures it), then implement (a) and
+   validate against the same data. NOTE: an earlier idea here — "bias the tip
+   toward the DIP joint" — was WRONG (the DIP sits higher off the paper than the
+   tip, making it worse); deleted.
+
 ## Needs on-device verification (built, not yet confirmed by play)
 
-1. **"Some things still need working out"** — user flagged remaining rough
-   edges during the 2026-07-19 bass session but didn't enumerate them yet.
-   TODO: get the specifics and file them here.
+1. **Any other rough edges from the bass session?** — parallax drift (#0) is
+   filed; ask the user whether more of the "some things still need working out"
+   remain to capture.
 2. **Latency HUD `total`** — the actual millisecond number still hasn't been
    read off the HUD, even though feel is now good. Nice-to-have confirmation.
 3. **"My Sample" recorded voice** — record → pitched playback across keys.
