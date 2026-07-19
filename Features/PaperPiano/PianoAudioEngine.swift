@@ -14,8 +14,21 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
     case xylophone, glockenspiel, vibraphone, marimba, tubularBells, handbells
     // Zither/harp family (Paper Orchestra Phase 3).
     case orchestralHarp
+    // Bass family (bass-guitar sheet): shown in their own picker when the bass
+    // sheet is active, hidden from the general melodic picker.
+    case uprightBass, fingeredBass, pickedBass, fretlessBass, slapBass, synthBass
 
     var id: String { rawValue }
+
+    /// The bass-guitar sheet's timbres (its picker filters on this).
+    var isBass: Bool {
+        switch self {
+        case .uprightBass, .fingeredBass, .pickedBass,
+             .fretlessBass, .slapBass, .synthBass: return true
+        default: return false
+        }
+    }
+    static var bassFamily: [InstrumentPreset] { allCases.filter(\.isBass) }
 
     var displayName: String {
         switch self {
@@ -31,6 +44,12 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
         case .tubularBells:  return "Tubular Bells"
         case .handbells:     return "Handbells"
         case .orchestralHarp: return "Harp"
+        case .uprightBass:   return "Upright"
+        case .fingeredBass:  return "Fingered"
+        case .pickedBass:    return "Picked"
+        case .fretlessBass:  return "Fretless"
+        case .slapBass:      return "Slap"
+        case .synthBass:     return "Synth Bass"
         }
     }
 
@@ -44,6 +63,9 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
         case .xylophone, .glockenspiel, .vibraphone, .marimba: return "music.note"
         case .tubularBells, .handbells: return "bell.fill"
         case .orchestralHarp: return "pianokeys"
+        case .uprightBass, .fingeredBass, .pickedBass,
+             .fretlessBass, .slapBass: return "guitars"
+        case .synthBass:     return "waveform.path"
         }
     }
 
@@ -65,6 +87,12 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
         // church-handbell. Listen-test before advertising it as the real thing.
         case .handbells:     return 112
         case .orchestralHarp: return 46  // Orchestral Harp
+        case .uprightBass:   return 32   // Acoustic Bass
+        case .fingeredBass:  return 33   // Electric Bass (finger)
+        case .pickedBass:    return 34   // Electric Bass (pick)
+        case .fretlessBass:  return 35   // Fretless Bass
+        case .slapBass:      return 36   // Slap Bass 1
+        case .synthBass:     return 38   // Synth Bass 1
         }
     }
 
@@ -82,6 +110,13 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
         case .tubularBells:  return 38
         case .handbells:     return 34
         case .orchestralHarp: return 30
+        // Bass wants presence, not wash — reverb muddies the low end fast.
+        case .uprightBass:   return 14
+        case .fingeredBass:  return 10
+        case .pickedBass:    return 10
+        case .fretlessBass:  return 18
+        case .slapBass:      return 8
+        case .synthBass:     return 12
         }
     }
 
@@ -100,6 +135,13 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
         case .tubularBells:  return (0.0, 0.0, 2.0)
         case .handbells:     return (-1.0, 0.5, 2.5)
         case .orchestralHarp: return (0.5, 0.0, 1.5)
+        // Low-shelf lift for body; slap/pick get mid/high presence for attack.
+        case .uprightBass:   return (4.0, -0.5, -2.5)
+        case .fingeredBass:  return (3.5, 0.0, -1.5)
+        case .pickedBass:    return (3.0, 1.0, 0.5)
+        case .fretlessBass:  return (3.5, 1.0, -1.0)
+        case .slapBass:      return (3.0, 1.5, 1.5)
+        case .synthBass:     return (4.5, 0.5, -0.5)
         }
     }
 
@@ -109,9 +151,11 @@ enum InstrumentPreset: String, CaseIterable, Identifiable {
     /// SoundFont's own envelope regardless of this flag.
     var sustains: Bool {
         switch self {
-        // A plucked harp decays audibly like a struck mallet, not a bell's
+        // A plucked harp/bass decays audibly like a struck mallet, not a bell's
         // long resonance or an organ's indefinite sustain.
-        case .grandPiano, .electricPiano, .xylophone, .marimba, .orchestralHarp: return false
+        case .grandPiano, .electricPiano, .xylophone, .marimba, .orchestralHarp,
+             .uprightBass, .fingeredBass, .pickedBass,
+             .fretlessBass, .slapBass, .synthBass: return false
         case .pipeOrgan, .synthLead, .strings,
              .glockenspiel, .vibraphone, .tubularBells, .handbells: return true
         }
@@ -191,6 +235,14 @@ class PianoAudioEngine {
     private var usingSampler = false
     private let audioQueue = DispatchQueue(label: "com.tapnote.audio", qos: .userInteractive)
 
+    /// A separate sampler for the user's own recorded sample, loaded from a plain
+    /// audio file (safe, unlike the third-party SF2 that crashes AUSampler — see
+    /// the class note). Only ever carries the melodic voice; percussion (channel
+    /// 9) always stays on `synthUnit`.
+    private let customSampler = AVAudioUnitSampler()
+    private var hasCustomSample = false      // audioQueue-only: a sample is loaded & playable
+    private var usingCustomSample = false    // audioQueue-only: route melodic notes to customSampler
+
     /// A sounding MIDI note is only unique per (note, channel) — GM drum-map
     /// note numbers (channel 9/percussion) overlap the ordinary melodic note
     /// range (channel 0), so tracking bare note numbers would let a struck
@@ -223,6 +275,10 @@ class PianoAudioEngine {
         engine.connect(synthUnit, to: reverb, format: nil)
         engine.connect(reverb, to: eq, format: nil)
         engine.connect(eq, to: engine.mainMixerNode, format: nil)
+
+        // The custom-sample voice runs on its own sampler, dry into the mixer.
+        engine.attach(customSampler)
+        engine.connect(customSampler, to: engine.mainMixerNode, format: nil)
 
         // Point the synth at its SoundFont before the engine initializes it.
         usingSampler = loadSoundBank()
@@ -266,9 +322,13 @@ class PianoAudioEngine {
         try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
         // Low-latency I/O so notes speak as soon as a finger lands. 44.1 kHz
         // matches the SoundFont's native sample rate (no live resampling).
-        try? session.setPreferredIOBufferDuration(0.01)
+        // 5 ms buffer: AUMIDISynth's render is light enough to fill it reliably.
+        try? session.setPreferredIOBufferDuration(0.005)
         try? session.setPreferredSampleRate(44_100)
         try? session.setActive(true)
+        // Report the audio tail (buffer + hardware) to the latency probe — the
+        // dispatch→speaker leg the camera pipeline can't see. Valid once active.
+        LatencyProbe.shared.setAudioOutputLatency(session.outputLatency + session.ioBufferDuration)
         #endif
     }
 
@@ -333,13 +393,12 @@ class PianoAudioEngine {
                 self.eq.bands[2].gain = g.high
             }
 
+            // Picking a GM instrument leaves the custom-sample voice; silence
+            // whatever was ringing (on either instrument) so nothing hangs.
+            self.usingCustomSample = false
+            self.silenceAll()
+
             guard self.usingSampler else { return }
-            // Silence held notes (on whichever channel they're actually on) so
-            // nothing hangs across the program change.
-            for sounding in self.soundingNotes {
-                self.synthUnit.stopNote(sounding.note, onChannel: sounding.channel)
-            }
-            self.soundingNotes.removeAll()
             self.synthUnit.sendProgramChange(preset.gmProgram, onChannel: 0)
             print("🎹 Instrument: \(preset.displayName) (program \(preset.gmProgram))")
         }
@@ -383,22 +442,19 @@ class PianoAudioEngine {
             let midiVelocity = UInt8(min(127, Int(velocity * 127)))
             let sounding = SoundingNote(note: midiNote, channel: channel)
 
-            if self.usingSampler {
-                // Re-striking a sounding note without a note-off stacks voices —
-                // always release first.
-                if self.soundingNotes.contains(sounding) {
-                    self.synthUnit.stopNote(midiNote, onChannel: channel)
-                }
-                self.synthUnit.startNote(midiNote, withVelocity: midiVelocity, onChannel: channel)
-                self.soundingNotes.insert(sounding)
+            guard let target = self.midiTarget(channel: channel) else {
+                self.playSynthNote(key: key, velocity: velocity); return
+            }
+            // Re-striking a sounding note without a note-off stacks voices —
+            // always release first.
+            if self.soundingNotes.contains(sounding) { self.stopMidi(midiNote, channel: channel) }
+            target.startNote(midiNote, withVelocity: midiVelocity, onChannel: channel)
+            self.soundingNotes.insert(sounding)
 
-                // Schedule note-off after 1.2 seconds
-                self.audioQueue.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-                    self?.synthUnit.stopNote(midiNote, onChannel: channel)
-                    self?.soundingNotes.remove(sounding)
-                }
-            } else {
-                self.playSynthNote(key: key, velocity: velocity)
+            // Schedule note-off after 1.2 seconds
+            self.audioQueue.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                self?.stopMidi(midiNote, channel: channel)
+                self?.soundingNotes.remove(sounding)
             }
         }
     }
@@ -409,18 +465,15 @@ class PianoAudioEngine {
     func holdNote(key: PaperPianoKey, velocity: Float = 0.8, channel: UInt8 = 0) {
         audioQueue.async { [weak self] in
             guard let self else { return }
-            if self.usingSampler {
-                let midiNote = self.midiNoteNumber(for: key)
-                let midiVelocity = UInt8(min(127, Int(velocity * 127)))
-                let sounding = SoundingNote(note: midiNote, channel: channel)
-                if self.soundingNotes.contains(sounding) {
-                    self.synthUnit.stopNote(midiNote, onChannel: channel)
-                }
-                self.synthUnit.startNote(midiNote, withVelocity: midiVelocity, onChannel: channel)
-                self.soundingNotes.insert(sounding)
-            } else {
-                self.playSynthNote(key: key, velocity: velocity)
+            guard let target = self.midiTarget(channel: channel) else {
+                self.playSynthNote(key: key, velocity: velocity); return
             }
+            let midiNote = self.midiNoteNumber(for: key)
+            let midiVelocity = UInt8(min(127, Int(velocity * 127)))
+            let sounding = SoundingNote(note: midiNote, channel: channel)
+            if self.soundingNotes.contains(sounding) { self.stopMidi(midiNote, channel: channel) }
+            target.startNote(midiNote, withVelocity: midiVelocity, onChannel: channel)
+            self.soundingNotes.insert(sounding)
         }
     }
 
@@ -435,19 +488,16 @@ class PianoAudioEngine {
             let midiVelocity = UInt8(min(127, Int(velocity * 127)))
             let sounding = SoundingNote(note: midiNote, channel: channel)
 
-            if self.usingSampler {
-                if self.soundingNotes.contains(sounding) {
-                    self.synthUnit.stopNote(midiNote, onChannel: channel)
-                }
-                self.synthUnit.startNote(midiNote, withVelocity: midiVelocity, onChannel: channel)
-                self.soundingNotes.insert(sounding)
+            guard let target = self.midiTarget(channel: channel) else {
+                self.playSynthNote(key: key, velocity: velocity); return
+            }
+            if self.soundingNotes.contains(sounding) { self.stopMidi(midiNote, channel: channel) }
+            target.startNote(midiNote, withVelocity: midiVelocity, onChannel: channel)
+            self.soundingNotes.insert(sounding)
 
-                self.audioQueue.asyncAfter(deadline: .now() + 4.0) { [weak self] in
-                    self?.synthUnit.stopNote(midiNote, onChannel: channel)
-                    self?.soundingNotes.remove(sounding)
-                }
-            } else {
-                self.playSynthNote(key: key, velocity: velocity)
+            self.audioQueue.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+                self?.stopMidi(midiNote, channel: channel)
+                self?.soundingNotes.remove(sounding)
             }
         }
     }
@@ -468,11 +518,75 @@ class PianoAudioEngine {
         audioQueue.async { [weak self] in
             guard let self else { return }
             let midiNote = self.midiNoteNumber(for: key)
-            if self.usingSampler {
-                self.synthUnit.stopNote(midiNote, onChannel: channel)
-                self.soundingNotes.remove(SoundingNote(note: midiNote, channel: channel))
-            }
+            self.stopMidi(midiNote, channel: channel)
+            self.soundingNotes.remove(SoundingNote(note: midiNote, channel: channel))
         }
+    }
+
+    // MARK: - Custom Sample Voice
+
+    /// The MIDI instrument a note should sound on. The custom sample only ever
+    /// carries the melodic voice (channel 0); percussion stays on `synthUnit`.
+    /// nil means neither path is available → additive-synth fallback.
+    private func midiTarget(channel: UInt8) -> AVAudioUnitMIDIInstrument? {
+        if usingCustomSample, hasCustomSample, channel != percussionChannel { return customSampler }
+        if usingSampler { return synthUnit }
+        return nil
+    }
+
+    /// Stops a note on both instruments — cheap, and avoids a hung note if the
+    /// active voice changed while the note was still ringing.
+    private func stopMidi(_ note: UInt8, channel: UInt8) {
+        synthUnit.stopNote(note, onChannel: channel)
+        customSampler.stopNote(note, onChannel: channel)
+    }
+
+    /// Silences everything on both instruments (used on any voice switch).
+    private func silenceAll() {
+        for s in soundingNotes { stopMidi(s.note, channel: s.channel) }
+        soundingNotes.removeAll()
+    }
+
+    /// Loads a recorded audio file as the custom sampler instrument, pitch-mapped
+    /// across the keyboard. Loading a plain audio file (not SF2) is the safe path.
+    @discardableResult
+    func loadCustomSample(url: URL) -> Bool {
+        do {
+            try customSampler.loadAudioFiles(at: [url])
+            audioQueue.async { [weak self] in self?.hasCustomSample = true }
+            return true
+        } catch {
+            print("custom sample load error: \(error)")
+            return false
+        }
+    }
+
+    /// Makes the loaded custom sample the active melodic voice.
+    func selectCustomSample() {
+        audioQueue.async { [weak self] in
+            guard let self, self.hasCustomSample else { return }
+            self.silenceAll()
+            self.usingCustomSample = true
+            print("🎙️ Voice: My Sample")
+        }
+    }
+
+    /// Temporarily switches the audio session so the mic can be recorded, then
+    /// restores the low-latency playback session. Restarts the engine if the
+    /// category change stopped it.
+    func setRecordingSession(_ recording: Bool) {
+        #if os(iOS)
+        let s = AVAudioSession.sharedInstance()
+        if recording {
+            try? s.setCategory(.playAndRecord, mode: .default,
+                               options: [.defaultToSpeaker, .allowBluetooth, .mixWithOthers])
+        } else {
+            try? s.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try? s.setPreferredIOBufferDuration(0.01)
+        }
+        try? s.setActive(true)
+        if !engine.isRunning { try? engine.start() }
+        #endif
     }
 
     // MARK: - MIDI Note Number

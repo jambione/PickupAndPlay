@@ -30,6 +30,7 @@ struct PaperPianoView: View {
     @State private var manualCorners: [CGPoint] = []
     @State private var showKeyboard = true
     @Environment(\.dismiss) var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     private let keyboardHeight: CGFloat = 160
 
     private var isPlaying: Bool { camera.calibrationState == .calibrated }
@@ -56,6 +57,16 @@ struct PaperPianoView: View {
                         .allowsHitTesting(false)
                     NoteFlashOverlay(activeNotes: camera.activeNotes)
                     playTopBar
+                    if LatencyProbe.enabled {
+                        VStack {
+                            HStack {
+                                Spacer()
+                                LatencyHUD().padding(.top, 64).padding(.trailing, 10)
+                            }
+                            Spacer()
+                        }
+                        .allowsHitTesting(false)
+                    }
                 } else {
                     RegistrationOverlay(camera: camera,
                                         manualMode: $manualCalibrationMode,
@@ -72,6 +83,8 @@ struct PaperPianoView: View {
             if isPlaying {
                 if camera.activeVariant == .drumKit {
                     DrumKitPickerBar()
+                } else if camera.activeVariant == .bassGuitar {
+                    BassPickerBar()
                 } else {
                     InstrumentPickerBar()
                 }
@@ -130,14 +143,24 @@ struct PaperPianoView: View {
         }
         .sheet(isPresented: $showingPrintSheet) { PrintInstructionsView() }
         .sheet(isPresented: $showCalibrationHelp) { CalibrationHelpView() }
-        .onAppear { camera.start() }
-        .onDisappear { camera.stop() }
+        .onAppear { camera.start(); setKeepAwake(true) }
+        .onDisappear { camera.stop(); setKeepAwake(false) }
         .onChange(of: camera.calibrationState) {
             if camera.calibrationState == .calibrated {
                 manualCalibrationMode = false
                 manualCorners = []
             }
         }
+        // You watch the paper, not the screen — so the phone never sees a touch
+        // and would auto-lock mid-play. Keep the screen awake while TapNote is
+        // foregrounded; iOS clears this flag on background, so re-assert on return.
+        .onChange(of: scenePhase) { setKeepAwake(scenePhase == .active) }
+    }
+
+    private func setKeepAwake(_ on: Bool) {
+        #if canImport(UIKit)
+        UIApplication.shared.isIdleTimerDisabled = on
+        #endif
     }
 
     private var playTopBar: some View {
@@ -651,15 +674,93 @@ private struct ZoomBadge: View {
 /// applied to the audio engine on appear and on change.
 private struct InstrumentPickerBar: View {
     @AppStorage("tapnote.instrument") private var instrumentRaw = InstrumentPreset.grandPiano.rawValue
+    @ObservedObject private var recorder = CustomSampleRecorder.shared
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(InstrumentPreset.allCases) { preset in
-                    let selected = preset.rawValue == instrumentRaw
+                // Record / re-record your own sample.
+                Button {
+                    Haptics.selection()
+                    recorder.toggle()
+                } label: {
+                    chip(icon: recorder.isRecording ? "stop.circle.fill" : "mic.fill",
+                         title: recorder.isRecording ? "Recording…"
+                                : (recorder.hasSample ? "Re-record" : "Record"),
+                         selected: recorder.isRecording,
+                         tint: recorder.isRecording ? .red : Color.white.opacity(0.14))
+                }
+                .buttonStyle(.plain)
+
+                // Your recorded sound as a playable voice (once one exists).
+                if recorder.hasSample {
+                    let selected = recorder.isCustomVoiceSelected
+                    Button {
+                        guard !selected else { return }
+                        Haptics.selection()
+                        recorder.selectCustomVoice()
+                    } label: {
+                        chip(icon: "waveform.badge.mic", title: "My Sample", selected: selected)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                ForEach(InstrumentPreset.allCases.filter { !$0.isBass }) { preset in
+                    let selected = !recorder.isCustomVoiceSelected && preset.rawValue == instrumentRaw
                     Button {
                         guard !selected else { return }
                         instrumentRaw = preset.rawValue
+                        Haptics.selection()
+                        recorder.deselectCustomVoice()
+                        PianoAudioEngine.shared.loadInstrument(preset)
+                    } label: {
+                        chip(icon: preset.sfSymbol, title: preset.displayName, selected: selected)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+        }
+        .background(Color(white: 0.1))
+        .onAppear {
+            if let preset = InstrumentPreset(rawValue: instrumentRaw) {
+                PianoAudioEngine.shared.loadInstrument(preset)
+            }
+        }
+        .alert("Microphone access needed", isPresented: $recorder.permissionDenied) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Enable microphone access for TapNote in Settings to record your own sample.")
+        }
+    }
+
+    /// One picker chip. `tint` overrides the unselected background (for Record).
+    private func chip(icon: String, title: String, selected: Bool, tint: Color? = nil) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon).font(.system(size: 11, weight: .semibold))
+            Text(title).font(.system(size: 12, weight: .semibold, design: .rounded))
+        }
+        .foregroundColor(selected || tint != nil ? .white : .white.opacity(0.65))
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .background(selected ? Color.indigo : (tint ?? Color.white.opacity(0.08)), in: Capsule())
+    }
+}
+
+// MARK: - Bass Picker
+
+/// Horizontal bass-timbre chips, mirroring `DrumKitPickerBar` — shown instead
+/// of the general instrument picker while the bass-guitar sheet is active.
+private struct BassPickerBar: View {
+    @AppStorage("tapnote.bass") private var bassRaw = InstrumentPreset.fingeredBass.rawValue
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(InstrumentPreset.bassFamily) { preset in
+                    let selected = preset.rawValue == bassRaw
+                    Button {
+                        guard !selected else { return }
+                        bassRaw = preset.rawValue
                         Haptics.selection()
                         PianoAudioEngine.shared.loadInstrument(preset)
                     } label: {
@@ -680,7 +781,7 @@ private struct InstrumentPickerBar: View {
         }
         .background(Color(white: 0.1))
         .onAppear {
-            if let preset = InstrumentPreset(rawValue: instrumentRaw) {
+            if let preset = InstrumentPreset(rawValue: bassRaw), preset.isBass {
                 PianoAudioEngine.shared.loadInstrument(preset)
             }
         }
@@ -743,6 +844,8 @@ enum BundledDoc: CaseIterable {
     case drumKitA3
     case malletBellsA3
     case zitherA3
+    case bassA3
+    case bassQRPatch3oct
 
     var resourceName: String {
         switch self {
@@ -752,23 +855,30 @@ enum BundledDoc: CaseIterable {
         case .drumKitA3:           return "TapNote_DrumKit_A3"
         case .malletBellsA3:      return "TapNote_MalletBells_A3"
         case .zitherA3:           return "TapNote_Zither_A3"
+        case .bassA3:             return "TapNote_Bass_A3"
+        case .bassQRPatch3oct:    return "TapNote_3oct_QR_Patch"
         }
     }
 
     var shareTitle: String {
         switch self {
-        case .keyboard2OctaveA3:   return "2-Octave Sheet — one A3 page"
-        case .keyboard3Octave2xA3: return "3-Octave Sheet — 2 pages, tape together"
+        case .keyboard2OctaveA3:   return "2-Octave Piano — one A3 page"
+        case .keyboard3Octave2xA3: return "3-Octave Piano — 2 pages, tape together"
         case .keyboardQR:          return "Original QR Test Sheet"
-        case .drumKitA3:           return "Drum Kit Sheet — one A3 page"
-        case .malletBellsA3:      return "Mallet & Bells Sheet — one A3 page"
-        case .zitherA3:           return "Zither Sheet — one A3 page"
+        case .drumKitA3:           return "Drum Kit — one A3 page"
+        case .malletBellsA3:      return "Mallet & Bells — one A3 page"
+        case .zitherA3:           return "Zither — one A3 page"
+        case .bassA3:             return "Bass Guitar — one A3 page"
+        case .bassQRPatch3oct:    return "3-Octave QR Upgrade Patch (for old sheets)"
         }
     }
 
     /// Sheets offered in the Print/Share screen. `keyboardQR` is an older
     /// detection-test artifact, not something to hand end users — omitted here.
-    static let printable: [BundledDoc] = [.keyboard2OctaveA3, .keyboard3Octave2xA3, .drumKitA3, .malletBellsA3]
+    static let printable: [BundledDoc] = [
+        .keyboard2OctaveA3, .keyboard3Octave2xA3, .drumKitA3,
+        .malletBellsA3, .zitherA3, .bassA3, .bassQRPatch3oct,
+    ]
 
     /// URL inside the app bundle, or nil if the file is missing from the target.
     var url: URL? {

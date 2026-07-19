@@ -100,9 +100,15 @@ class CameraSessionManager: NSObject, ObservableObject {
     private var pressedKeyIDs: Set<Int> = []
     private var frameIndex = 0
 
-    /// QR re-detection cadence once calibrated (every Nth frame ≈ 10 Hz at 60 fps —
+    /// Presentation timestamp (host clock, seconds) of the frame being processed
+    /// right now — read only by LatencyProbe to time first-contact → note-on.
+    private var currentFramePresentationTime: Double = 0
+
+    /// QR re-detection cadence once calibrated (every Nth frame ≈ 5 Hz at 60 fps —
     /// plenty, since corner smoothing low-passes anyway). Scanning runs every frame.
-    private let qrFrameStride = 6
+    /// Kept sparse deliberately: the barcode pass is the per-frame cost spike, and
+    /// measured effective fps was 48/60 with it at every 6th frame.
+    private let qrFrameStride = 12
 
     // MARK: Press detection (camera hand-tracking)
 
@@ -116,6 +122,13 @@ class CameraSessionManager: NSObject, ObservableObject {
         var pressedKeyID: Int?     // the key this finger is currently sounding, if any
         var candidateKeyID: Int?   // key seen under the finger this frame (pending confirm)
         var candidateCount: Int    // consecutive frames the candidate has held
+        var candidateContactTime: TimeInterval = 0  // host-clock presentation time of first sighting on this candidate (LatencyProbe)
+        // Lift-release state: the key this finger lift-released and must depart
+        // (or visibly re-settle on) before it may sound again, plus the settle
+        // counter and when the current press started (guards the approach tail).
+        var awaitingDepartureFrom: Int? = nil
+        var departureSettleCount: Int = 0
+        var pressStartTime: TimeInterval = 0
         var lastSeen: TimeInterval
     }
 
@@ -144,10 +157,25 @@ class CameraSessionManager: NSObject, ObservableObject {
     // Tunables — normalized image units (0…1). Need on-device tuning.
     private let handAssocRadius: Double = 0.3      // max hand-centroid travel between frames
     private let keyConfirmFrames = 3               // frames a finger must hold a key before it sounds (debounces boundary flicker)
+    // ^ THE accuracy↔latency dial. Each frame here adds ~1000/fps ms of tap→sound
+    //   delay but suppresses that many frames of boundary flicker / false fires.
+    //   Sweep it against LatencyProbe's HUD to find the balanced setting; raising
+    //   `targetFrameRate` buys the latency back without loosening this.
+    private let keyConfirmFramesFast = 2           // confirm window for a fast, deliberate arrival
+    private let fastTapSpeed: Double = 0.25        // arrival speed (normalized units/s) above which a press counts as deliberate — a boundary flicker barely moves, a real tap sweeps in
     private let historySpan: TimeInterval = 0.18
-    private let fingerTimeout: TimeInterval = 0.25
-    private let repressInterval: TimeInterval = 0.09  // min gap between note-ons of the same key
-    private let tipConfidence: Float = 0.4         // fingertip joint confidence floor — lowered so far-end fingers at steep view angles still track
+    private let fingerTimeout: TimeInterval = 0.45  // hold a finger's identity through detection dropouts; retriggers after longer gaps are handled by `dropoutReleased`, so this can stay short enough that a vanished finger's note doesn't ring long
+    private let liftReleaseSpeed: Double = 0.35    // tip speed (normalized units/s) above which a pressed finger counts as lifting — a holding finger is stationary
+    private let liftMinHold: TimeInterval = 0.15   // ignore lift-speed for this long after note-on (the approach's own tail would otherwise damp the note it just played)
+    private let repressInterval: TimeInterval = 0.09      // min gap between note-ons of the same key (anti-jitter only — a deliberate lift-and-retap is always legitimate)
+    private let repressIntervalSustained: TimeInterval = 0.12  // sustained keys: same anti-jitter idea, slightly wider for held notes
+    /// Keys released because tracking LOST the finger (prune / all-hands gone) —
+    /// the finger probably never lifted, so the same key re-firing right after
+    /// re-detection is a phantom retrigger, not a new tap. Deliberate move-offs
+    /// are never marked here, which is what keeps fast repeated tapping free.
+    private var dropoutReleased: [Int: TimeInterval] = [:]
+    private let dropoutRepressGuard: TimeInterval = 0.4
+    private let tipConfidence: Float = 0.25        // fingertip joint confidence floor — steep stand angles (phone tilted down at the sheet) foreshorten the hand and depress confidence; PressLog DETECT lines showed tips flickering below the old 0.4 floor
 
     /// Last camera-triggered note-on per key (video-queue-only) — caps how fast a
     /// flickering boundary can hammer the synth with retriggers.
@@ -161,6 +189,7 @@ class CameraSessionManager: NSObject, ObservableObject {
 
     func stop() {
         session.stopRunning()
+        FrameRecorder.shared.finish()   // finalize the diagnostic capture file
         DispatchQueue.main.async { self.isRunning = false }
     }
 
@@ -255,6 +284,10 @@ class CameraSessionManager: NSObject, ObservableObject {
     // MARK: - Session Setup
 
     /// Target capture rate. Drop to 30 if 60 proves too heavy thermally.
+    /// Balance knob: bump to 120 to halve per-frame time (so `keyConfirmFrames`
+    /// costs less latency) — but high-fps formats drop resolution, which starves
+    /// the big-span per-key detail. Compare 60 vs 120 on LatencyProbe's HUD:
+    /// watch achieved `fps` (does Vision keep up?) and the `captureLabel` resolution.
     private let targetFrameRate = 60.0
 
     /// Largest ≤1080p format that supports `targetFrameRate`. Resolution matters:
@@ -313,10 +346,14 @@ class CameraSessionManager: NSObject, ObservableObject {
             device.unlockForConfiguration()
             let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
             print("📷 capture format: \(dims.width)x\(dims.height) @ \(Int(targetFrameRate))fps")
+            LatencyProbe.shared.captureLabel = "\(dims.width)x\(dims.height)@\(Int(targetFrameRate))"
         } else {
             session.sessionPreset = .hd1280x720
             print("📷 capture format: 1280x720 @ default fps (no 60fps format)")
+            LatencyProbe.shared.captureLabel = "1280x720@~30 (no \(Int(targetFrameRate))fps fmt)"
         }
+        LatencyProbe.shared.targetFps = Int(targetFrameRate)
+        LatencyProbe.shared.keyConfirmFrames = keyConfirmFrames
 
         // Keep the tabletop sheet sharp: continuous AF biased to near range.
         if (try? device.lockForConfiguration()) != nil {
@@ -445,6 +482,10 @@ class CameraSessionManager: NSObject, ObservableObject {
 
     func confirmAutoCalibration() {
         setCalibrationCorners(detectedCorners)
+        if PressLog.enabled {
+            PressLog.shared.log("CALIBRATE variant=\(calibration.variant) corners=["
+                + detectedCorners.map { String(format: "(%.3f,%.3f)", $0.x, $0.y) }.joined(separator: ",") + "]")
+        }
         calibrationState = .calibrated
         foundMarkers = [:]
         detectedCorners = []
@@ -490,6 +531,19 @@ class CameraSessionManager: NSObject, ObservableObject {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         frameIndex &+= 1
 
+        if LatencyProbe.enabled {
+            let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
+            let host = LatencyProbe.hostNow()
+            currentFramePresentationTime = pts.isFinite ? pts : host
+            LatencyProbe.shared.recordFrame(presentationTime: currentFramePresentationTime, hostNow: host)
+        }
+
+        // Diagnostic video: record exactly what the detector sees during play,
+        // time-anchored to the press log (see FrameRecorder).
+        if FrameRecorder.enabled, isCalibratedOnVideoQueue {
+            FrameRecorder.shared.append(sampleBuffer)
+        }
+
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer,
                                             orientation: .up, options: [:])
 
@@ -508,8 +562,27 @@ class CameraSessionManager: NSObject, ObservableObject {
     private func processHandPose() {
         guard isCalibratedOnVideoQueue else { return }
         guard let observations = handPoseRequest.results, !observations.isEmpty else {
+            // Capture dropout transitions: we had fingers, now Vision sees no hand.
+            if PressLog.enabled, !fingers.isEmpty {
+                PressLog.shared.log("DROPOUT hadFingers=\(fingers.count)")
+            }
             handleNoFingers()
             return
+        }
+
+        // Detection snapshot ~4×/s: hand count + every tip's confidence, so the
+        // flicker (tips dipping below the confidence floor) is visible in data.
+        if PressLog.enabled, frameIndex % 15 == 0 {
+            let short = ["T", "I", "M", "R", "L"]   // thumb…little, same order as tipJoints
+            var parts: [String] = []
+            for (h, obs) in observations.enumerated() {
+                for (j, joint) in Self.tipJoints.enumerated() {
+                    if let p = try? obs.recognizedPoint(joint) {
+                        parts.append(String(format: "h%d%@=%.2f", h, short[j], p.confidence))
+                    }
+                }
+            }
+            PressLog.shared.log("DETECT hands=\(observations.count) " + parts.joined(separator: " "))
         }
 
         let now = Date().timeIntervalSinceReferenceDate
@@ -578,7 +651,14 @@ class CameraSessionManager: NSObject, ObservableObject {
     /// it can't get re-associated to a neighbour and retrigger.
     private func pruneStaleFingers(now: TimeInterval) {
         for (key, finger) in fingers where now - finger.lastSeen > fingerTimeout {
-            if let keyID = finger.pressedKeyID { releaseKey(keyID) }
+            if let keyID = finger.pressedKeyID {
+                if PressLog.enabled {
+                    PressLog.shared.log(String(format: "PRUNE id=%d key=%d gap=%.2fs",
+                                               finger.id, keyID, now - finger.lastSeen))
+                }
+                dropoutReleased[keyID] = now   // released by tracking loss, not by a lift
+                releaseKey(keyID)
+            }
             fingers.removeValue(forKey: key)
         }
         for (slot, track) in handTracks where now - track.lastSeen > fingerTimeout {
@@ -601,7 +681,9 @@ class CameraSessionManager: NSObject, ObservableObject {
     /// No hands in frame: release everything and forget tracked fingers.
     private func handleNoFingers() {
         guard !fingers.isEmpty || !handTracks.isEmpty else { return }
+        let now = Date().timeIntervalSinceReferenceDate
         for finger in fingers.values where finger.pressedKeyID != nil {
+            dropoutReleased[finger.pressedKeyID!] = now   // lost, not lifted
             releaseKey(finger.pressedKeyID!)
         }
         fingers.removeAll()
@@ -633,29 +715,89 @@ class CameraSessionManager: NSObject, ObservableObject {
         } else {
             finger.candidateKeyID = currentKeyID
             finger.candidateCount = 1
+            // Stamp when this finger first landed on the candidate key, for the
+            // honest tap→sound number (this span is what the debounce spends).
+            finger.candidateContactTime = currentFramePresentationTime
         }
-        guard finger.candidateCount >= keyConfirmFrames else { return }
+        // Lift release (sustained keys): the camera can't see press depth, and a
+        // straight-up lift slides the tip's projection ALONG the long key zone
+        // rather than off it — "still inside the zone" doesn't mean "still
+        // holding". A holding finger is stationary; a fast-moving tip is leaving.
+        // Damp immediately (like a piano damper) and latch: the key can't sound
+        // again until the finger moves off it or visibly settles onto it anew.
+        let speed = arrivalSpeed(of: finger)
+        if liveCalibration.variant.interactionModel == .sustained {
+            if let pressed = finger.pressedKeyID, finger.awaitingDepartureFrom == nil,
+               speed > liftReleaseSpeed,
+               finger.lastSeen - finger.pressStartTime > liftMinHold {
+                releaseKey(pressed)
+                finger.pressedKeyID = nil
+                finger.awaitingDepartureFrom = pressed
+                finger.departureSettleCount = 0
+                if PressLog.enabled {
+                    PressLog.shared.log(String(format: "LIFT key=%d speed=%.2f", pressed, speed))
+                }
+            }
+            if let waiting = finger.awaitingDepartureFrom {
+                if finger.candidateKeyID != waiting {
+                    finger.awaitingDepartureFrom = nil       // genuinely departed the key
+                } else if speed < liftReleaseSpeed {
+                    finger.departureSettleCount += 1         // hover ended: settling back on = a new press
+                    if finger.departureSettleCount >= keyConfirmFramesFast {
+                        finger.awaitingDepartureFrom = nil
+                    }
+                } else {
+                    finger.departureSettleCount = 0
+                }
+            }
+        }
+
+        // Adaptive confirm: a fast, deliberate arrival fires a frame sooner than a
+        // slow drift across a key boundary — responsiveness where intent is clear,
+        // debounce where it's ambiguous.
+        let required = speed > fastTapSpeed ? keyConfirmFramesFast : keyConfirmFrames
+        guard finger.candidateCount >= required else { return }
+        // Still latched on a lift-released key: no sound until it departs/re-settles.
+        if let waiting = finger.awaitingDepartureFrom, finger.candidateKeyID == waiting { return }
 
         // Edge trigger: only act when the confirmed key differs from what's sounding.
         guard finger.candidateKeyID != finger.pressedKeyID else { return }
         if let old = finger.pressedKeyID { releaseKey(old) }
         finger.pressedKeyID = nil
         if let key, key.id == finger.candidateKeyID {
+            if LatencyProbe.enabled {
+                LatencyProbe.shared.recordNote(confirmSeconds: LatencyProbe.hostNow() - finger.candidateContactTime)
+            }
             let velocity = arrivalVelocity(of: finger)
+            if PressLog.enabled {
+                let kb = liveCalibration.normalizedPoint(from: pt, previewSize: CGSize(width: 1, height: 1)) ?? .zero
+                PressLog.shared.log(String(format:
+                    "PRESS fp=(%.3f,%.3f) kb=(%.3f,%.3f) -> %@%d id=%d frameMidX=%.3f ch=%d var=%@ vel=%.2f req=%d",
+                    pt.x, pt.y, kb.x, kb.y, String(describing: key.note), key.octave, key.id,
+                    key.normalizedFrame.midX, Int(liveCalibration.variant.midiChannel),
+                    String(describing: liveCalibration.variant), velocity, required))
+            }
             switch liveCalibration.variant.interactionModel {
             case .sustained: pressKey(key, velocity: velocity)
             case .struckOnce: strikeKey(key, velocity: velocity)
             }
             finger.pressedKeyID = key.id
+            finger.pressStartTime = finger.lastSeen
         }
     }
 
-    /// Expressive dynamics: a fast strike lands loud, a gentle placement soft.
-    /// Speed is measured across the finger's recent history (normalized units/s).
-    private func arrivalVelocity(of finger: TrackedFinger) -> Float {
+    /// Raw approach speed over the finger's recent history (normalized units/s).
+    /// Feeds both the adaptive confirm window and the strike velocity.
+    private func arrivalSpeed(of finger: TrackedFinger) -> Double {
         guard let first = finger.history.first, let last = finger.history.last,
-              last.t - first.t > 0.01 else { return 0.7 }
-        let speed = distance(last.pt, first.pt) / (last.t - first.t)
+              last.t - first.t > 0.01 else { return 0 }
+        return distance(last.pt, first.pt) / (last.t - first.t)
+    }
+
+    /// Expressive dynamics: a fast strike lands loud, a gentle placement soft.
+    private func arrivalVelocity(of finger: TrackedFinger) -> Float {
+        let speed = arrivalSpeed(of: finger)
+        guard speed > 0 else { return 0.7 }
         return Float(min(1.0, 0.45 + speed * 1.2))
     }
 
@@ -668,7 +810,9 @@ class CameraSessionManager: NSObject, ObservableObject {
     private func pressKey(_ key: PaperPianoKey, velocity: Float) {
         guard !pressedKeyIDs.contains(key.id) else { return }
         let now = Date().timeIntervalSinceReferenceDate
-        if let last = lastCameraPress[key.id], now - last < repressInterval { return }
+        if let t = dropoutReleased[key.id], now - t < dropoutRepressGuard { return }
+        if let last = lastCameraPress[key.id], now - last < repressIntervalSustained { return }
+        dropoutReleased.removeValue(forKey: key.id)
         lastCameraPress[key.id] = now
         pressedKeyIDs.insert(key.id)
         PianoAudioEngine.shared.holdNote(key: key, velocity: velocity,
@@ -692,7 +836,9 @@ class CameraSessionManager: NSObject, ObservableObject {
     /// a note that was never being held in the first place.
     private func strikeKey(_ key: PaperPianoKey, velocity: Float) {
         let now = Date().timeIntervalSinceReferenceDate
+        if let t = dropoutReleased[key.id], now - t < dropoutRepressGuard { return }
         if let last = lastCameraPress[key.id], now - last < repressInterval { return }
+        dropoutReleased.removeValue(forKey: key.id)
         lastCameraPress[key.id] = now
         PianoAudioEngine.shared.playPercussiveNote(key: key, velocity: velocity,
                                                     channel: liveCalibration.variant.midiChannel)
@@ -730,6 +876,12 @@ class CameraSessionManager: NSObject, ObservableObject {
     private var alignedSince: TimeInterval?          // when all 4 corners became stable
     private var lastFullDetection: TimeInterval = 0  // last frame with all 4 markers
 
+    /// Mid-play sheet-swap debounce (video-queue-owned): a different sheet must
+    /// win `sheetSwapConfirmDetections` consecutive QR passes before it replaces
+    /// the locked one. ~5 Hz once calibrated → 8 ≈ 1.6 s of consistent intent.
+    private var pendingSheetSwap: (variant: KeyboardVariant, count: Int)?
+    private let sheetSwapConfirmDetections = 8
+
     /// All 4 corners must hold steady this long before the state advances to
     /// .aligned (the "short delay confirming recognition").
     private let alignStability: TimeInterval = 0.5
@@ -738,9 +890,10 @@ class CameraSessionManager: NSObject, ObservableObject {
     private let markerGrace: TimeInterval = 0.4
 
     /// Locates the keyboard from the four corner QR codes. Each QR encodes its
-    /// corner and sheet variant ("TAPNOTE:TL" = 3-octave legacy, "TAPNOTE:2:TL"
-    /// = 2-octave), so the paper identifies itself: detection is unambiguous,
+    /// corner and sheet variant ("TAPNOTE:3:TL" = 3-octave, "TAPNOTE:2:TL" =
+    /// 2-octave, …), so the paper identifies itself: detection is unambiguous,
     /// robust to lighting/angle, and the app switches key layouts automatically.
+    /// Pre-token legacy prints ("TAPNOTE:TL") are deliberately not recognized.
     private func detectQRCorners(_ results: [VNBarcodeObservation], now: TimeInterval) {
         var byVariant: [KeyboardVariant: [String: CGPoint]] = [:]
         var spanSum: CGFloat = 0
@@ -749,7 +902,10 @@ class CameraSessionManager: NSObject, ObservableObject {
             guard let payload = obs.payloadStringValue,
                   payload.hasPrefix("TAPNOTE:") else { continue }
             let rawSuffix = String(payload.dropFirst("TAPNOTE:".count))
-            let (variant, suffix) = KeyboardVariant.parseToken(from: rawSuffix)
+            // Legacy bare-form markers (no sheet token) parse as nil and are
+            // ignored entirely — stray pre-token prints on the desk must never
+            // enter the candidate set. See KeyboardVariant.parseToken.
+            guard let (variant, suffix) = KeyboardVariant.parseToken(from: rawSuffix) else { continue }
             // boundingBox is normalized with a bottom-left origin — flip Y to match
             // the fingertip coordinate space.
             let center = CGPoint(x: obs.boundingBox.midX, y: 1 - obs.boundingBox.midY)
@@ -759,14 +915,58 @@ class CameraSessionManager: NSObject, ObservableObject {
         }
         let avgMarkerSpan = spanCount > 0 ? spanSum / CGFloat(spanCount) : 0
 
-        // If both sheets are somehow in view, prefer a complete set, else the fullest.
-        let best = byVariant.max { a, b in
-            (a.value.count == 4 ? 10 : a.value.count) < (b.value.count == 4 ? 10 : b.value.count)
+        // Multiple sheets can be in frame at once (old prints on the same desk —
+        // observed in the field: a legacy sheet hijacked a live session). Prefer a
+        // complete 4-corner set, and among complete sets the LARGEST quad: the
+        // sheet the user actually framed dominates the view, stray ones are small.
+        func quadArea(_ m: [String: CGPoint]) -> CGFloat {
+            guard let tl = m["TL"], let tr = m["TR"], let bl = m["BL"], let br = m["BR"]
+            else { return 0 }
+            let p = [tl, tr, br, bl]   // shoelace over the perimeter order
+            var a: CGFloat = 0
+            for i in 0..<4 { a += p[i].x * p[(i + 1) % 4].y - p[(i + 1) % 4].x * p[i].y }
+            return abs(a) / 2
         }
+        func score(_ m: [String: CGPoint]) -> CGFloat {
+            CGFloat(m.count) * 10 + (m.count == 4 ? 100 + quadArea(m) * 50 : 0)
+        }
+        let best = byVariant.max { score($0.value) < score($1.value) }
         let found = best?.value ?? [:]
-        if let variant = best?.key, found.count == 4, variant != currentVariantVQ,
-           !isCalibratedOnVideoQueue {
-            setVariantOnVideoQueue(variant)
+
+        if let variant = best?.key, found.count == 4 {
+            if !isCalibratedOnVideoQueue {
+                // Registering: follow the best candidate freely.
+                if variant != currentVariantVQ { setVariantOnVideoQueue(variant) }
+                pendingSheetSwap = nil
+            } else if variant != currentVariantVQ {
+                // Mid-play sheet swap must be STICKY: a single frame of another
+                // sheet's QRs (stray print, misread) must never hijack a locked
+                // session. Require the other sheet to win consistently for
+                // ~1.2s (QR runs ~10 Hz once calibrated) before switching.
+                if pendingSheetSwap?.variant == variant {
+                    pendingSheetSwap = (variant, pendingSheetSwap!.count + 1)
+                } else {
+                    pendingSheetSwap = (variant, 1)
+                }
+                if pendingSheetSwap!.count >= sheetSwapConfirmDetections,
+                   let tl = found["TL"], let tr = found["TR"],
+                   let bl = found["BL"], let br = found["BR"] {
+                    setVariantOnVideoQueue(variant)
+                    let c = [tl, tr, bl, br]
+                    liveCalibration.setCorners(c)
+                    if PressLog.enabled {
+                        PressLog.shared.log("SWAP variant=\(variant) corners=["
+                            + c.map { String(format: "(%.3f,%.3f)", $0.x, $0.y) }.joined(separator: ",") + "]")
+                    }
+                    DispatchQueue.main.async { [weak self] in self?.calibration.setCorners(c) }
+                    // Audible confirmation — the player is watching the paper,
+                    // not the screen; an instrument change must never be silent.
+                    PianoAudioEngine.shared.playCalibrationCue()
+                    pendingSheetSwap = nil
+                }
+            } else {
+                pendingSheetSwap = nil   // steady on the current sheet
+            }
         }
 
         // Per-marker feedback while registering: highlight each recognized corner,
@@ -912,14 +1112,19 @@ class CameraSessionManager: NSObject, ObservableObject {
 
         switch found.count {
         case 4:
-            // Tighten on the keyboard, keeping a comfortable margin.
+            // Tighten on the keyboard — but keep generous margin: the margin is
+            // HAND room, not slack. At a downward stand angle the palm/wrist of a
+            // hand playing the near edge extends past the sheet toward the frame
+            // edge, and Vision's hand-pose model fails on a cropped hand (press-log
+            // data: near-end keys went dead while far-end keys tracked). So cap the
+            // sheet at ~65% of frame instead of the old 90%.
             let xs = found.values.map(\.x), ys = found.values.map(\.y)
             let span = max(xs.max()! - xs.min()!, ys.max()! - ys.min()!)
-            if span < 0.55 {
-                rampDeviceZoom(to: current * min(1.2, 0.8 / max(span, 0.05)))
+            if span < 0.45 {
+                rampDeviceZoom(to: current * min(1.2, 0.6 / max(span, 0.05)))
                 lastAutoFrameAction = now
                 publishHint(.zoomingIn)
-            } else if span > 0.9 {
+            } else if span > 0.65 {
                 rampDeviceZoom(to: current * 0.9)
                 lastAutoFrameAction = now
                 publishHint(.zoomingOut)

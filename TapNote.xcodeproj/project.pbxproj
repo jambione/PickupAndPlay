@@ -23,6 +23,10 @@
 		B014 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A014 /* Assets.xcassets */; };
 		B015 /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A015 /* CameraPreviewView.swift */; };
 		B016 /* CameraSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A016 /* CameraSessionManager.swift */; };
+		B025 /* LatencyProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = A025 /* LatencyProbe.swift */; };
+		B026 /* CustomSampleRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A026 /* CustomSampleRecorder.swift */; };
+		B027 /* PressLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A027 /* PressLog.swift */; };
+		B028 /* FrameRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A028 /* FrameRecorder.swift */; };
 		B017 /* PaperPianoEntryCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A017 /* PaperPianoEntryCard.swift */; };
 		B018 /* PaperPianoModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A018 /* PaperPianoModel.swift */; };
 		B019 /* PaperPianoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A019 /* PaperPianoView.swift */; };
@@ -50,6 +54,10 @@
 		A014 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
 		A015 /* CameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraPreviewView.swift; path = Features/PaperPiano/CameraPreviewView.swift; sourceTree = "<group>"; };
 		A016 /* CameraSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CameraSessionManager.swift; path = Features/PaperPiano/CameraSessionManager.swift; sourceTree = "<group>"; };
+		A025 /* LatencyProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LatencyProbe.swift; path = Features/PaperPiano/LatencyProbe.swift; sourceTree = "<group>"; };
+		A026 /* CustomSampleRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CustomSampleRecorder.swift; path = Features/PaperPiano/CustomSampleRecorder.swift; sourceTree = "<group>"; };
+		A027 /* PressLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PressLog.swift; path = Features/PaperPiano/PressLog.swift; sourceTree = "<group>"; };
+		A028 /* FrameRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FrameRecorder.swift; path = Features/PaperPiano/FrameRecorder.swift; sourceTree = "<group>"; };
 		A017 /* PaperPianoEntryCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PaperPianoEntryCard.swift; path = Features/PaperPiano/PaperPianoEntryCard.swift; sourceTree = "<group>"; };
 		A018 /* PaperPianoModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PaperPianoModel.swift; path = Features/PaperPiano/PaperPianoModel.swift; sourceTree = "<group>"; };
 		A019 /* PaperPianoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PaperPianoView.swift; path = Features/PaperPiano/PaperPianoView.swift; sourceTree = "<group>"; };
@@ -111,6 +119,10 @@
 				A013 /* ProgressAndAchievementsView.swift */,
 				A015 /* CameraPreviewView.swift */,
 				A016 /* CameraSessionManager.swift */,
+				A025 /* LatencyProbe.swift */,
+				A026 /* CustomSampleRecorder.swift */,
+				A027 /* PressLog.swift */,
+				A028 /* FrameRecorder.swift */,
 				A017 /* PaperPianoEntryCard.swift */,
 				A018 /* PaperPianoModel.swift */,
 				A019 /* PaperPianoView.swift */,
@@ -229,6 +241,10 @@
 				B013 /* ProgressAndAchievementsView.swift in Sources */,
 				B015 /* CameraPreviewView.swift in Sources */,
 				B016 /* CameraSessionManager.swift in Sources */,
+				B025 /* LatencyProbe.swift in Sources */,
+				B026 /* CustomSampleRecorder.swift in Sources */,
+				B027 /* PressLog.swift in Sources */,
+				B028 /* FrameRecorder.swift in Sources */,
 				B017 /* PaperPianoEntryCard.swift in Sources */,
 				B018 /* PaperPianoModel.swift in Sources */,
 				B019 /* PaperPianoView.swift in Sources */,
@@ -272,7 +288,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "TapNote uses the camera to detect your fingers on the paper piano.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "TapNote listens to you play to give real-time feedback on your notes.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "TapNote uses the microphone so you can record your own sound and play it across the keys.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -320,7 +336,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "TapNote uses the camera to detect your fingers on the paper piano.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "TapNote listens to you play to give real-time feedback on your notes.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "TapNote uses the microphone so you can record your own sound and play it across the keys.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

@@ -156,6 +156,50 @@ struct PaperPianoKey: Identifiable {
         (.C,4),(.D,4),(.E,4),(.F,4),(.G,4),(.A,4),(.B,4),(.C,5)
     ])
 
+    /// Fretted-string logic (bass guitar): a 2D grid where pitch = open string
+    /// + fret position. Rows are strings (low E at the bottom, like tablature),
+    /// columns are fret positions (0 = open, at the left). Every cell is a real
+    /// musical pitch computed from the string's open MIDI note + the fret's
+    /// semitone offset — so duplicate pitches across strings (fret 5 = next
+    /// open string) exist exactly like on a real bass.
+    ///
+    /// Geometry: rows are inset vertically (26mm of the sheet's 180mm group
+    /// height on each side) so the corner QR backings don't overlap the corner
+    /// cells; fret columns span the full width. These mm fractions MUST match
+    /// `Tools/generate_sheet.swift`'s bass sheet (kept in sync by hand, like
+    /// the drum kit).
+    private static func makeFrettedLayout(openStrings: [UInt8], frets: Int) -> [PaperPianoKey] {
+        let pitchTable: [NotePitch] = [.C, .CSharp, .D, .DSharp, .E, .F,
+                                       .FSharp, .G, .GSharp, .A, .ASharp, .B]
+        let insetFrac = 26.0 / 180.0             // vertical inset (QR clearance)
+        let rowFrac = (180.0 - 2 * 26.0) / 180.0 / Double(openStrings.count)
+        let stringGap = 0.012                    // small dead zone between strings beats a wrong-string note
+        let colW = 1.0 / Double(frets)
+
+        var keys: [PaperPianoKey] = []
+        for (row, open) in openStrings.enumerated() {
+            for fret in 0..<frets {
+                let midi = Int(open) + fret
+                var k = PaperPianoKey(id: row * frets + fret,
+                                      note: pitchTable[midi % 12],
+                                      octave: midi / 12 - 1,
+                                      isBlack: false,
+                                      whiteKeyIndex: fret, blackKeyOffset: 0)
+                k.normalizedFrame = CGRect(x: colW * Double(fret),
+                                           y: insetFrac + rowFrac * Double(row) + stringGap,
+                                           width: colW,
+                                           height: rowFrac - 2 * stringGap)
+                keys.append(k)
+            }
+        }
+        return keys
+    }
+
+    /// Bass guitar: standard-tuned 4 strings (E1 A1 D2 G2), frets 0–8 —
+    /// range E1…D#3, 36 tap cells on one A3 sheet at hand-sized targets.
+    static let bassLayout: [PaperPianoKey] =
+        makeFrettedLayout(openStrings: [28, 33, 38, 43], frets: 9)
+
     /// Legacy alias: the 3-octave layout (existing call sites; prefer variant APIs).
     static var layout: [PaperPianoKey] { threeOctaveLayout }
 
@@ -166,6 +210,7 @@ struct PaperPianoKey: Identifiable {
         case .drumKit:     return drumKitLayout
         case .malletBars:  return malletBarsLayout
         case .zither:      return zitherLayout
+        case .bassGuitar:  return bassLayout
         }
     }
 
@@ -174,6 +219,7 @@ struct PaperPianoKey: Identifiable {
     private static let byIDDrum = Dictionary(uniqueKeysWithValues: drumKitLayout.map { ($0.id, $0) })
     private static let byIDMallet = Dictionary(uniqueKeysWithValues: malletBarsLayout.map { ($0.id, $0) })
     private static let byIDZither = Dictionary(uniqueKeysWithValues: zitherLayout.map { ($0.id, $0) })
+    private static let byIDBass = Dictionary(uniqueKeysWithValues: bassLayout.map { ($0.id, $0) })
 
     static func byID(_ id: Int, variant: KeyboardVariant) -> PaperPianoKey? {
         switch variant {
@@ -182,6 +228,7 @@ struct PaperPianoKey: Identifiable {
         case .drumKit:     return byIDDrum[id]
         case .malletBars:  return byIDMallet[id]
         case .zither:      return byIDZither[id]
+        case .bassGuitar:  return byIDBass[id]
         }
     }
 }
@@ -200,11 +247,11 @@ enum InteractionModel {
 // MARK: - Keyboard Variant
 
 /// Which printed sheet is in front of the camera. Encoded in the corner QR
-/// payloads (`TAPNOTE:TL` = 3-octave legacy bare form, `TAPNOTE:3:TL` = same
-/// explicitly, `TAPNOTE:2:TL` = 2-octave), so the paper identifies itself and
-/// the app switches layouts automatically.
+/// payloads (`TAPNOTE:3:TL` = 3-octave, `TAPNOTE:2:TL` = 2-octave, …), so the
+/// paper identifies itself and the app switches layouts automatically. The
+/// pre-token legacy form (`TAPNOTE:TL`) is no longer recognized.
 enum KeyboardVariant: String, CaseIterable {
-    case threeOctave, twoOctave, drumKit, malletBars, zither
+    case threeOctave, twoOctave, drumKit, malletBars, zither, bassGuitar
 
     var displayName: String {
         switch self {
@@ -213,23 +260,24 @@ enum KeyboardVariant: String, CaseIterable {
         case .drumKit:     return "Drum Kit"
         case .malletBars:  return "Mallet & Bells"
         case .zither:      return "Zither"
+        case .bassGuitar:  return "Bass Guitar"
         }
     }
 
     var interactionModel: InteractionModel {
         switch self {
-        case .threeOctave, .twoOctave:          return .sustained
-        case .drumKit, .malletBars, .zither:    return .struckOnce
+        case .threeOctave, .twoOctave:                       return .sustained
+        case .drumKit, .malletBars, .zither, .bassGuitar:    return .struckOnce
         }
     }
 
     /// MIDI channel notes go out on. Independent of `interactionModel` —
-    /// mallets/zither are struck but still melodic, so they stay on channel
-    /// 0; only percussion needs the GM percussion channel (9).
+    /// mallets/zither/bass are struck/plucked but still melodic, so they stay
+    /// on channel 0; only percussion needs the GM percussion channel (9).
     var midiChannel: UInt8 {
         switch self {
-        case .threeOctave, .twoOctave, .malletBars, .zither: return 0
-        case .drumKit:                                       return 9
+        case .threeOctave, .twoOctave, .malletBars, .zither, .bassGuitar: return 0
+        case .drumKit:                                                    return 9
         }
     }
 
@@ -242,14 +290,12 @@ enum KeyboardVariant: String, CaseIterable {
     var usesZoneBoard: Bool {
         switch self {
         case .threeOctave, .twoOctave, .malletBars: return false
-        case .drumKit, .zither:                     return true
+        case .drumKit, .zither, .bassGuitar:        return true
         }
     }
 
     /// The QR sub-prefix identifying this sheet (the part of the payload
-    /// after "TAPNOTE:", before its own trailing ":"). `threeOctave`'s token
-    /// is also reachable via the bare legacy form with no token at all —
-    /// sheets printed before this scheme existed must keep working.
+    /// after "TAPNOTE:", before its own trailing ":").
     var qrToken: String {
         switch self {
         case .threeOctave: return "3"
@@ -257,6 +303,7 @@ enum KeyboardVariant: String, CaseIterable {
         case .drumKit:     return "DRUM"
         case .malletBars:  return "MALLET"
         case .zither:      return "ZITHER"
+        case .bassGuitar:  return "BASS"
         }
     }
 
@@ -267,14 +314,20 @@ enum KeyboardVariant: String, CaseIterable {
 
     /// Parses a QR payload's post-"TAPNOTE:" suffix into (variant, corner-name
     /// suffix), trying the longest known token first (so no future token can
-    /// be misread as a prefix of another). No token match at all → the legacy
-    /// bare-prefix default, `threeOctave`.
-    static func parseToken(from suffix: String) -> (variant: KeyboardVariant, rest: String) {
+    /// be misread as a prefix of another).
+    ///
+    /// Returns nil for the legacy bare form (`TAPNOTE:<corner>`, no token) and
+    /// anything else unrecognized — legacy prints are deliberately INVISIBLE
+    /// to the scanner: a stray old sheet on the desk hijacked a live session
+    /// in the field (locked onto its quad with the wrong layout). Old 3-octave
+    /// prints are upgraded by taping `TapNote_3oct_QR_Patch.pdf` cut-outs over
+    /// their corner QRs.
+    static func parseToken(from suffix: String) -> (variant: KeyboardVariant, rest: String)? {
         let tokensLongestFirst = byToken.keys.sorted { $0.count > $1.count }
         for token in tokensLongestFirst where suffix.hasPrefix(token + ":") {
             return (byToken[token]!, String(suffix.dropFirst(token.count + 1)))
         }
-        return (.threeOctave, suffix)
+        return nil
     }
 }
 
